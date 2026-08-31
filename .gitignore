@@ -1,0 +1,21 @@
+/target
+viewer/topgent.json
+/app/src-tauri/target
+/app/src-tauri/gen
+.DS_Store
+topgent-sbom.cdx.json
+fuzz/target/
+fuzz/artifacts/
+
+# Reports written into the tree while testing. One of these held an AWS access
+# key that had been pasted into a terminal, which a scan then found sitting in
+# the working directory: untracked, but one `git add -A` from being committed.
+/viewer/*.json
+/topgent-report.json
+/*.cdx.json
+
+# The fuzzer's own corpus. libFuzzer writes tens of thousands of inputs it
+# found interesting, which is 61 MB of machine-generated noise nobody reads.
+# The inputs worth keeping are the ones that found a bug, and those are kept
+# deliberately under fuzz/seeds with a test beside them.
+/fuzz/corpus/

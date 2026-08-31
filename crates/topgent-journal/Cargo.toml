@@ -1,0 +1,17 @@
+[package]
+name = "topgent-journal"
+description = "The append-only event log: what changed, and what Topgent did."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+topgent-core = { path = "../topgent-core" }
+topgent-facts = { path = "../topgent-facts" }
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -1,0 +1,36 @@
+[package]
+name = "topgent-cli"
+description = "Headless Topgent. Runs the collectors, folds, scores, and prints."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "topgent"
+path = "src/main.rs"
+
+[dependencies]
+topgent-facts = { path = "../topgent-facts" }
+topgent-core = { path = "../topgent-core" }
+topgent-collect = { path = "../topgent-collect" }
+topgent-enforce = { path = "../topgent-enforce" }
+topgent-journal = { path = "../topgent-journal" }
+topgent-report = { path = "../topgent-report" }
+topgent-policy = { path = "../topgent-policy" }
+topgent-export = { path = "../topgent-export" }
+topgent-lab = { path = "../topgent-lab" }
+serde_json = "1"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "policy_cli"
+path = "tests/policy_cli.rs"
+
+[[test]]
+name = "lab_cli"
+path = "tests/lab_cli.rs"

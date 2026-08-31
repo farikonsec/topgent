@@ -1,0 +1,220 @@
+name: Release
+
+# Tagging is the whole trigger. `git tag v0.1.0 && git push --tags` builds every
+# artefact, checksums them, and opens a draft release. Nothing is published
+# until a human presses the button on that draft.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest,   target: aarch64-apple-darwin,      ext: "" }
+          - { os: macos-latest,   target: x86_64-apple-darwin,       ext: "" }
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  ext: "" }
+          - { os: windows-latest, target: x86_64-pc-windows-msvc,    ext: ".exe" }
+          # Windows on ARM runs x64 through emulation, but process enumeration
+          # returns nothing from an emulated process: every collector reports
+          # available and produces no facts. A native build is the fix.
+          - { os: windows-latest, target: aarch64-pc-windows-msvc,   ext: ".exe" }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2.9.2
+
+      # The suite runs again here rather than trusting that CI already passed.
+      # A release is the one build where "it was green yesterday" is not enough.
+      # Skipped where the runner cannot execute the target it just built.
+      - run: cargo test --workspace --locked
+        if: matrix.target != 'x86_64-apple-darwin' && matrix.target != 'aarch64-pc-windows-msvc'
+
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-cli
+
+      - name: Package
+        shell: bash
+        run: |
+          set -eu
+          version="${GITHUB_REF_NAME#v}"
+          name="topgent-${version}-${{ matrix.target }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/topgent${{ matrix.ext }}" "dist/$name/"
+          cp README.md LICENSE NOTICE "dist/$name/"
+          cd dist
+          if [ "$RUNNER_OS" = Windows ]; then
+            7z a "${name}.zip" "$name" > /dev/null
+          else
+            tar -czf "${name}.tar.gz" "$name"
+          fi
+          rm -rf "$name"
+          ls -la
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  # The desktop application. Bundled with hdiutil rather than Tauri's dmg
+  # bundler, which drives Finder over AppleScript to lay out the window and
+  # times out where no interactive session exists. A plain disk image needs no
+  # Finder and behaves the same on a runner as on a desk.
+  #
+  # The bundle is ad-hoc signed. That is not a Developer ID and Gatekeeper still
+  # refuses it, but Tauri leaves the bundle without a _CodeSignature directory,
+  # which macOS reports as a damaged signature rather than an absent one. An
+  # ad-hoc signature makes the bundle structurally valid.
+  macos-app:
+    name: Desktop application (${{ matrix.arch }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: aarch64, target: aarch64-apple-darwin }
+          - { arch: x86_64,  target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2.9.2
+      - name: Build the application
+        run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-ui
+      - name: Sign and package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          stage=$(mktemp -d)
+          app="$stage/Topgent.app"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/topgent-ui" "$app/Contents/MacOS/Topgent"
+          cp assets/icon.png "$app/Contents/Resources/"
+          python3 - "$app/Contents/Info.plist" "$version" <<'PY'
+          import sys, plistlib, pathlib
+          path, version = sys.argv[1], sys.argv[2]
+          pathlib.Path(path).write_bytes(plistlib.dumps({
+              "CFBundleName": "Topgent",
+              "CFBundleDisplayName": "Topgent",
+              "CFBundleIdentifier": "org.hadosec.topgent",
+              "CFBundleVersion": version,
+              "CFBundleShortVersionString": version,
+              "CFBundleExecutable": "Topgent",
+              "CFBundlePackageType": "APPL",
+              "LSMinimumSystemVersion": "12.0",
+              "NSHighResolutionCapable": True,
+          }))
+          PY
+          # Ad-hoc, not a Developer ID. Gatekeeper still refuses it, but a
+          # bundle with no _CodeSignature reads to macOS as a damaged signature
+          # rather than an absent one, which is worse.
+          codesign --force --deep --sign - "$app"
+          codesign --verify --verbose=2 "$app"
+          ln -s /Applications "$stage/Applications"
+          mkdir -p dist
+          hdiutil create -volname Topgent -srcfolder "$stage" -ov -format UDZO \
+            "dist/Topgent-${version}-${{ matrix.arch }}.dmg"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dmg-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  # The Windows application. Built for both architectures because the ARM64
+  # machine is the one where an x64 binary fails silently, and a desktop user
+  # has no doctor output to notice it from.
+  #
+  # No installer: WiX and NSIS add a signing story this release does not have,
+  # and an unpacked application directory needs neither.
+  windows-app:
+    name: Desktop application (Windows ${{ matrix.arch }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x86_64,  target: x86_64-pc-windows-msvc }
+          - { arch: aarch64, target: aarch64-pc-windows-msvc }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2.9.2
+      - name: Build the application
+        run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-ui
+      - name: Package
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          name="Topgent-${version}-windows-${{ matrix.arch }}"
+          mkdir -p "dist/$name"
+          cp "target/${{ matrix.target }}/release/topgent-ui.exe" "dist/$name/Topgent.exe"
+          cp README.md LICENSE NOTICE "dist/$name/"
+          cd dist && 7z a "${name}.zip" "$name" > /dev/null && rm -rf "$name"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: winapp-${{ matrix.arch }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: Draft release
+    needs: [build, macos-app, windows-app]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          path: staging
+          merge-multiple: true
+
+      # What this release is built from. Not the AI-BOM: that document
+      # describes the AI assets Topgent finds on a host, this one describes
+      # what Topgent itself is made of. Written before the checksums so it is
+      # covered by them.
+      - name: Bill of materials
+        run: |
+          set -eu
+          ./scripts/sbom.py staging/topgent-sbom.cdx.json
+
+      # One checksum file over everything, so a person can verify a download
+      # without trusting the page it came from.
+      - name: Checksums
+        run: |
+          set -eu
+          cd staging
+          sha256sum * > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Draft the release
+        uses: softprops/action-gh-release@v3
+        with:
+          draft: true
+          files: staging/*
+          generate_release_notes: true
+          body: |
+            Binaries are **not code-signed**. macOS Gatekeeper and Windows
+            SmartScreen will warn on first run. Verify your download against
+            `SHA256SUMS` before allowing it.
+
+            `topgent-sbom.cdx.json` lists every dependency this release was
+            built from, with its version, licence, and checksum. It is a
+            different document from the AI-BOM the tool produces about a host.
+
+            Linux ships the command-line tool only. The desktop build is no
+            longer blocked on a toolkit and needs a verified run on a Linux
+            host before it ships. See [ROADMAP.md](ROADMAP.md).

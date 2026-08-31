@@ -1,0 +1,16 @@
+# Paths trufflehog skips, each with its reason. Nothing here is listed to
+# quieten a scan.
+#
+# Build output and the object database are not source. Git history is scanned
+# separately and properly by gitleaks, which understands commits; pointing a
+# filesystem scanner at .git/objects just re-reads every historical blob as if
+# it were a file on disk.
+^\.git/
+^target/
+^app/src-tauri/target/
+#
+# The connector-URL fixture: a URL carrying embedded user info, pointing at a
+# reserved and unresolvable `.example` name. The test asserts the user
+# info is discarded before the asset identity is built. Removing it would be a
+# bug, not a fix.
+^crates/topgent-core/tests/suite/inventory\.rs$

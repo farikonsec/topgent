@@ -1,0 +1,93 @@
+# Fuzzing.
+#
+# Every parser here reads something Topgent did not write: a socket listing, an
+# audit log, a report that describes processes an attacker may have named. Those
+# are the inputs an adversary shapes, and a unit test only ever tries what
+# somebody thought of.
+#
+# Short runs on every push, so a change that breaks a parser is caught in the
+# pull request. A long run weekly, because finding the interesting input takes
+# longer than a pull request should.
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Sunday, before the Monday security scan.
+    - cron: "0 4 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          # What a collector reads from the operating system.
+          - lsof
+          - ss
+          - netstat
+          - audit
+          - sockaddr
+          # What is read off the host: agent configuration, the policy file,
+          # and the report the CI gate is pointed at.
+          - config
+          # What the interface reads: a compiled address table, a report, a
+          # settings file anyone can edit, and every value drawn in a column.
+          - ownership
+          - report
+          - settings
+          - text
+          # What leaves the machine.
+          - session_export
+    steps:
+      - uses: actions/checkout@v7
+
+      # Nightly, because a sanitiser needs it. This is the only place in the
+      # project that uses one, and it never ships.
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      # Five minutes on a push, an hour on the schedule. A crash is a failure,
+      # and the input that caused it is kept so it can be reproduced exactly.
+      # Inputs that found a bug once, so a run always tries them first.
+      - name: Seed the corpus
+        working-directory: fuzz
+        run: |
+          set -eu
+          if [ -d "seeds/${{ matrix.target }}" ]; then
+            mkdir -p "corpus/${{ matrix.target }}"
+            cp -R "seeds/${{ matrix.target }}/." "corpus/${{ matrix.target }}/"
+          fi
+
+      - name: Fuzz ${{ matrix.target }}
+        working-directory: fuzz
+        run: |
+          set -eu
+          seconds=300
+          if [ "${{ github.event_name }}" = "schedule" ]; then seconds=3600; fi
+          cargo fuzz run "${{ matrix.target }}" -- \
+            -max_total_time="$seconds" -rss_limit_mb=4096
+
+      - name: Keep what crashed it
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: crash-${{ matrix.target }}
+          path: fuzz/artifacts/
+          if-no-files-found: ignore

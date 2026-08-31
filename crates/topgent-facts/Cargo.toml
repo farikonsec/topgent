@@ -1,0 +1,17 @@
+[package]
+name = "topgent-facts"
+description = "The fact vocabulary every Topgent collector emits and the core folds. No dependencies, no I/O."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# Deliberately empty. This crate is the seam between untrusted collectors and
+# the pure core, so it carries no dependencies at all: nothing to audit, nothing
+# to pin, nothing that can pull in an I/O surface by accident.
+[dependencies]
+
+[lints]
+workspace = true

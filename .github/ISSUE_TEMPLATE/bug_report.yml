@@ -1,0 +1,45 @@
+name: Bug report
+description: Report incorrect behaviour in Topgent.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report suspected vulnerabilities here. See [SECURITY.md](../blob/main/SECURITY.md).
+
+        Redact hostnames, paths, and usernames before submitting output. Topgent output describes a host in detail and that detail is not required to reproduce a defect.
+  - type: textarea
+    id: command
+    attributes:
+      label: Command executed
+      render: shell
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+    validations: { required: true }
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed result
+    validations: { required: true }
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of `topgent doctor`
+      description: Reports which sensors are available on the host. Redact before pasting.
+      render: shell
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes:
+      label: Topgent version
+      placeholder: "0.1.0"
+    validations: { required: true }
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [macOS, Linux, Windows]
+    validations: { required: true }

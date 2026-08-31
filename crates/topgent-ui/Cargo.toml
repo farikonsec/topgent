@@ -1,0 +1,32 @@
+[package]
+name = "topgent-ui"
+description = "The Topgent desktop interface. A projection of one report, drawn natively."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+topgent-report = { path = "../topgent-report" }
+iced = { version = "0.14", features = ["tokio", "advanced", "svg", "image", "lazy"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt"] }
+
+[build-dependencies]
+# Build-time only. The published table is vendored gzipped and decompressed
+# here; nothing from this crate reaches the shipped binary.
+flate2 = "1"
+
+[lib]
+name = "topgent_ui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "topgent-ui"
+path = "src/main.rs"

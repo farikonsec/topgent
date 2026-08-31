@@ -1,0 +1,90 @@
+# Announced networks, for the country and network columns.
+#
+# Format: one range per line, tab separated.
+#   CIDR<TAB>ASN<TAB>ISO 3166-1 alpha-2<TAB>network name
+#
+# ASN 0 means the range is announced by nobody: a reserved or special-use
+# block. That is a different answer from "unknown", and the interface keeps
+# them apart. An address in no range here is unknown and is never guessed at.
+#
+# This file ships with the special-use registries, which are fixed by RFC, and
+# with the networks that carry almost all AI-agent traffic. It is deliberately
+# not the whole internet: the full public-domain IP-to-ASN table is 8.9 MB
+# compressed and fetching it at build time would put a network dependency in
+# the build of a security tool. Run scripts/fetch-networks.sh to replace this
+# file with the full table when that trade is worth making.
+#
+# Sources: IANA IPv4/IPv6 Special-Purpose Address Registry (RFC 6890 and its
+# updates), and each operator published range.
+
+# --- Special-use, announced by nobody ---
+0.0.0.0/8	0		This network
+10.0.0.0/8	0		Private use
+100.64.0.0/10	0		Carrier-grade NAT
+127.0.0.0/8	0		Loopback
+169.254.0.0/16	0		Link-local
+172.16.0.0/12	0		Private use
+192.0.0.0/24	0		IETF protocol assignments
+192.0.2.0/24	0		Documentation (TEST-NET-1)
+192.168.0.0/16	0		Private use
+198.18.0.0/15	0		Benchmarking
+198.51.100.0/24	0		Documentation (TEST-NET-2)
+203.0.113.0/24	0		Documentation (TEST-NET-3)
+224.0.0.0/4	0		Multicast
+240.0.0.0/4	0		Reserved
+::1/128	0		Loopback
+fc00::/7	0		Unique local
+fe80::/10	0		Link-local
+2001:db8::/32	0		Documentation
+ff00::/8	0		Multicast
+
+# --- Cloud instance metadata. The one address that must never read unknown. ---
+169.254.169.254/32	0		Cloud instance metadata service
+fd00:ec2::254/128	0		EC2 instance metadata service
+
+# --- Networks that carry almost all AI-agent traffic ---
+# Model providers and their fronting CDNs, the three large clouds, and the
+# package and source registries an agent reaches while working.
+104.16.0.0/13	13335	US	CLOUDFLARENET
+104.24.0.0/14	13335	US	CLOUDFLARENET
+172.64.0.0/13	13335	US	CLOUDFLARENET
+162.159.0.0/16	13335	US	CLOUDFLARENET
+198.41.128.0/17	13335	US	CLOUDFLARENET
+1.1.1.0/24	13335	US	CLOUDFLARENET
+1.0.0.0/24	13335	US	CLOUDFLARENET
+2606:4700::/32	13335	US	CLOUDFLARENET
+8.8.4.0/24	15169	US	GOOGLE
+8.8.8.0/24	15169	US	GOOGLE
+142.250.0.0/15	15169	US	GOOGLE
+172.217.0.0/16	15169	US	GOOGLE
+216.58.192.0/19	15169	US	GOOGLE
+2607:f8b0::/32	15169	US	GOOGLE
+34.64.0.0/10	396982	US	GOOGLE-CLOUD-PLATFORM
+35.184.0.0/13	396982	US	GOOGLE-CLOUD-PLATFORM
+35.192.0.0/12	396982	US	GOOGLE-CLOUD-PLATFORM
+3.0.0.0/9	16509	US	AMAZON-02
+13.32.0.0/15	16509	US	AMAZON-02 (CloudFront)
+13.224.0.0/14	16509	US	AMAZON-02 (CloudFront)
+18.128.0.0/9	16509	US	AMAZON-02
+52.0.0.0/11	14618	US	AMAZON-AES
+54.144.0.0/12	14618	US	AMAZON-AES
+99.84.0.0/16	16509	US	AMAZON-02 (CloudFront)
+2600:1f00::/24	16509	US	AMAZON-02
+20.0.0.0/8	8075	US	MICROSOFT-CORP-MSN-AS-BLOCK
+40.64.0.0/10	8075	US	MICROSOFT-CORP-MSN-AS-BLOCK
+52.224.0.0/11	8075	US	MICROSOFT-CORP-MSN-AS-BLOCK
+104.40.0.0/13	8075	US	MICROSOFT-CORP-MSN-AS-BLOCK
+2603:1000::/24	8075	US	MICROSOFT-CORP-MSN-AS-BLOCK
+140.82.112.0/20	36459	US	GITHUB
+192.30.252.0/22	36459	US	GITHUB
+185.199.108.0/22	54113	US	FASTLY (GitHub Pages)
+151.101.0.0/16	54113	US	FASTLY
+2a04:4e42::/32	54113	US	FASTLY
+146.75.0.0/16	54113	US	FASTLY
+23.192.0.0/11	20940	US	AKAMAI-ASN1
+104.64.0.0/10	20940	US	AKAMAI-ASN1
+2600:1400::/24	20940	US	AKAMAI-ASN1
+76.76.21.0/24	16509	US	VERCEL
+66.33.22.0/24	14061	US	DIGITALOCEAN-ASN
+159.65.0.0/16	14061	US	DIGITALOCEAN-ASN
+2400:cb00::/32	13335	US	CLOUDFLARENET

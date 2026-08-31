@@ -1,0 +1,32 @@
+name: Agent definition
+description: Request detection for an AI agent, or report a definition that matches incorrectly.
+labels: ["agent-definition"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Definitions require a fixture and a decoy that must not match. See [CONTRIBUTING.md](../blob/main/CONTRIBUTING.md).
+  - type: input
+    id: product
+    attributes:
+      label: Product name and version
+    validations: { required: true }
+  - type: input
+    id: executable
+    attributes:
+      label: Executable name
+      placeholder: "codex"
+    validations: { required: true }
+  - type: textarea
+    id: paths
+    attributes:
+      label: Installation paths
+      description: Full paths from a real installation, one per line, per platform.
+      render: shell
+    validations: { required: true }
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Request type
+      options: [New definition, Definition matches something it should not, Definition fails to match]
+    validations: { required: true }
