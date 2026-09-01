@@ -12,6 +12,13 @@ permissions:
   contents: write
 
 jobs:
+  # Asset names carry no version. That is deliberate: GitHub only serves a
+  # permanent download link as
+  # `/releases/latest/download/<exact name>`, so a name containing 0.2.0 gives
+  # a link that rots on the next release and a README nobody keeps current.
+  # The version is still on the release itself, in SHA256SUMS, and in what the
+  # binary answers to `--version`.
+  #
   # Every artefact below is named from the tag, while the binary inside reports
   # the manifest version. Nothing made them agree, so `git tag v9.9.9` would
   # ship an archive called 9.9.9 holding a tool that answers 0.1.0. One grep is
@@ -68,7 +75,7 @@ jobs:
         run: |
           set -eu
           version="${GITHUB_REF_NAME#v}"
-          name="topgent-${version}-${{ matrix.target }}"
+          name="topgent-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/topgent${{ matrix.ext }}" "dist/$name/"
           cp README.md LICENSE NOTICE "dist/$name/"
@@ -159,7 +166,7 @@ jobs:
           ln -s /Applications "$stage/Applications"
           mkdir -p dist
           hdiutil create -volname Topgent -srcfolder "$stage" -ov -format UDZO \
-            "dist/Topgent-${version}-${{ matrix.arch }}.dmg"
+            "dist/Topgent-macos-${{ matrix.arch }}.dmg"
       - uses: actions/upload-artifact@v7
         with:
           name: dmg-${{ matrix.arch }}
@@ -195,7 +202,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          name="Topgent-${version}-windows-${{ matrix.arch }}"
+          name="Topgent-windows-${{ matrix.arch }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/topgent-ui.exe" "dist/$name/Topgent.exe"
           cp README.md LICENSE NOTICE "dist/$name/"
@@ -239,7 +246,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          name="Topgent-${version}-linux-${{ matrix.arch }}"
+          name="Topgent-linux-${{ matrix.arch }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/topgent-ui" "dist/$name/Topgent"
           chmod +x "dist/$name/Topgent"

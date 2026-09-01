@@ -114,13 +114,29 @@ Cline, Roo Code, and Continue run in one editor process. Topgent reports that pr
 
 ## Install
 
-Pre-built binaries: [Releases](https://github.com/farikonsec/topgent/releases).
+Every link below downloads from the [latest release](https://github.com/farikonsec/topgent/releases/latest) and stays correct as new ones ship. Pick the one matching your processor.
 
 | Platform | Command line | Desktop app |
 |---|---|---|
-| 🍎 **macOS** 12+ (Apple silicon, Intel) | ✓ | `.dmg` |
-| 🪟 **Windows** 10/11, Server 2022+ (x64, ARM64) | ✓ | `.zip` |
-| 🐧 **Linux** (x86-64, ARM64) | ✓ | `.tar.gz` |
+| 🍎 **macOS** 12+ | [Apple silicon][cli-mac-arm] · [Intel][cli-mac-x64] | [Apple silicon][dmg-arm] · [Intel][dmg-x64] |
+| 🪟 **Windows** 10/11, Server 2022+ | [ARM64][cli-win-arm] · [x64][cli-win-x64] | [ARM64][app-win-arm] · [x64][app-win-x64] |
+| 🐧 **Linux** | [x86-64][cli-lin-x64] | [ARM64][app-lin-arm] · [x86-64][app-lin-x64] |
+
+Also on every release: [`SHA256SUMS`][sums] to verify a download against, and [`topgent-sbom.cdx.json`][sbom], the CycloneDX bill of materials for the build itself. That last one is a different document from the AI-BOM this tool produces about a host.
+
+[cli-mac-arm]: https://github.com/farikonsec/topgent/releases/latest/download/topgent-aarch64-apple-darwin.tar.gz
+[cli-mac-x64]: https://github.com/farikonsec/topgent/releases/latest/download/topgent-x86_64-apple-darwin.tar.gz
+[cli-win-arm]: https://github.com/farikonsec/topgent/releases/latest/download/topgent-aarch64-pc-windows-msvc.zip
+[cli-win-x64]: https://github.com/farikonsec/topgent/releases/latest/download/topgent-x86_64-pc-windows-msvc.zip
+[cli-lin-x64]: https://github.com/farikonsec/topgent/releases/latest/download/topgent-x86_64-unknown-linux-gnu.tar.gz
+[dmg-arm]: https://github.com/farikonsec/topgent/releases/latest/download/Topgent-macos-aarch64.dmg
+[dmg-x64]: https://github.com/farikonsec/topgent/releases/latest/download/Topgent-macos-x86_64.dmg
+[app-win-arm]: https://github.com/farikonsec/topgent/releases/latest/download/Topgent-windows-aarch64.zip
+[app-win-x64]: https://github.com/farikonsec/topgent/releases/latest/download/Topgent-windows-x86_64.zip
+[app-lin-arm]: https://github.com/farikonsec/topgent/releases/latest/download/Topgent-linux-aarch64.tar.gz
+[app-lin-x64]: https://github.com/farikonsec/topgent/releases/latest/download/Topgent-linux-x86_64.tar.gz
+[sums]: https://github.com/farikonsec/topgent/releases/latest/download/SHA256SUMS
+[sbom]: https://github.com/farikonsec/topgent/releases/latest/download/topgent-sbom.cdx.json
 
 The same build, on two of them. The interface follows the host's own light or dark setting.
 
