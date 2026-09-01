@@ -42,10 +42,14 @@ fn the_scan_header_names_the_same_version_as_the_flag() {
     );
 }
 
+/// Unix only: Windows has no pid 1, so `stop 1` there is correctly "no
+/// process". The Windows protected set is covered in `topgent-enforce`.
+///
 /// `topgent stop 1` printed "this would stop systemd ... re-run with --yes".
 /// The enforcement crate refuses a protected process at the point of
 /// signalling, so the prompt was describing something that could not happen,
 /// and inviting the operator to try it. Found on a Linux lab host.
+#[cfg(not(windows))]
 #[test]
 fn stopping_the_init_process_is_refused_rather_than_offered() {
     let output = Command::new(env!("CARGO_BIN_EXE_topgent"))
