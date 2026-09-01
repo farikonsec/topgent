@@ -627,6 +627,8 @@ fn read_bounded_tail(path: &std::path::Path) -> Result<String, CollectError> {
 mod tests {
     #![allow(clippy::indexing_slicing)]
 
+    use std::fmt::Write as _;
+
     use super::{
         AttemptEvent, ConnectionEvent, attempt_matches_process, event_is_confirmed,
         event_matches_process, parse_audit_connections, parse_sockaddr,
@@ -717,12 +719,14 @@ mod tests {
         let mut text = String::new();
         for n in 0..20u64 {
             let (at, id) = (1_700_000_000 + n, 100 + n);
-            text.push_str(&format!(
-                "type=SYSCALL msg=audit({at}.100:{id}): syscall=44 success=yes pid=700 a0=3\n"
-            ));
-            text.push_str(&format!(
-                "type=SOCKADDR msg=audit({at}.100:{id}): saddr=02000050CB00716E0000000000000000\n"
-            ));
+            let _ = writeln!(
+                text,
+                "type=SYSCALL msg=audit({at}.100:{id}): syscall=44 success=yes pid=700 a0=3"
+            );
+            let _ = writeln!(
+                text,
+                "type=SOCKADDR msg=audit({at}.100:{id}): saddr=02000050CB00716E0000000000000000"
+            );
         }
         let events = parse_audit_connections(&text);
         assert_eq!(
