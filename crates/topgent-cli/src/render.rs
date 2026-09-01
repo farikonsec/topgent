@@ -31,7 +31,8 @@ pub(crate) fn render(show_facts: bool) {
         "  {}  {}",
         ink.heading(&format!("{} agents", scored.len())),
         ink.faint(&format!(
-            "topgent 0.1.0 · {} facts · {} of {} sensors",
+            "topgent {} · {} facts · {} of {} sensors",
+            env!("CARGO_PKG_VERSION"),
             result.facts.len(),
             collectors.len() - result.failures.len(),
             collectors.len()
