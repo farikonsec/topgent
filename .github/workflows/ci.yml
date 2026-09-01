@@ -88,6 +88,11 @@ jobs:
   #
   # 1.88 is where let-chains stabilised, and the collectors use them in 146
   # places. The manifests claimed 1.85 until this job proved otherwise.
+  #
+  # The floor is 1.95 now, and it is not ours: sysinfo 0.39.6 requires it, and
+  # that version is the one whose process enumeration works on Windows on ARM.
+  # Holding 1.88 would mean giving that back, so the number moved instead. This
+  # job is what caught the manifests still claiming the old one.
   msrv:
     name: Minimum supported Rust (${{ matrix.os }})
     strategy:
@@ -99,6 +104,6 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.88.0"
+          toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@v2.9.2
       - run: cargo test --workspace --locked

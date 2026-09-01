@@ -5,7 +5,7 @@ members = ["crates/topgent-facts", "crates/topgent-policy", "crates/topgent-core
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.95"
 license = "Apache-2.0"
 repository = "https://github.com/farikonsec/topgent"
 # Distribution is through GitHub Releases, not crates.io. Declaring this

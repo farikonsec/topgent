@@ -4,7 +4,7 @@ Topgent is a security tool. Changes require evidence and an explicit statement o
 
 ## Setup
 
-Requires Rust 1.88 or later. No other dependency for the command-line tool.
+Requires Rust 1.95 or later. No other dependency for the command-line tool.
 
 ```sh
 git clone https://github.com/farikonsec/topgent && cd topgent
@@ -32,7 +32,7 @@ cargo test --workspace --locked
 ./scripts/scan.sh
 ```
 
-CI runs these on macOS, Linux, and Windows, plus the Rust 1.88 minimum. Conditional compilation means a platform-specific defect is invisible to the other two platforms.
+CI runs these on macOS, Linux, and Windows, plus the Rust 1.95 minimum. Conditional compilation means a platform-specific defect is invisible to the other two platforms.
 
 ## Build artifacts
 
