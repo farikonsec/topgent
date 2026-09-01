@@ -275,7 +275,7 @@ fn open_log_holders(logs: &[PathBuf]) -> Vec<(PathBuf, u32)> {
 }
 
 /// Parse `lsof -Fpn` output: a `p` line sets the process every later `n` names.
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", test, fuzzing))]
 /// Parse `lsof -Fpn` output into the paths each process holds open.
 ///
 /// Public so a fuzz target can reach it: this reads the output of a system

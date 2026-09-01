@@ -199,9 +199,15 @@ mod hex {
                 "{raw} is not a colour: expected six hexadecimal digits, optionally prefixed with #"
             )));
         }
+        // `get`, not a slice. The length test above counts bytes, so six bytes
+        // of multi-byte text passes it and then splits a character in half,
+        // which panics. The settings file is one anyone can edit, so that is
+        // reachable from a typo.
         let channel = |at: usize| {
-            u8::from_str_radix(&digits[at..at + 2], 16)
-                .map_err(|_| serde::de::Error::custom(format!("{raw} is not hexadecimal")))
+            digits
+                .get(at..at + 2)
+                .and_then(|pair| u8::from_str_radix(pair, 16).ok())
+                .ok_or_else(|| serde::de::Error::custom(format!("{raw} is not hexadecimal")))
         };
         Ok(super::rgb(channel(0)?, channel(2)?, channel(4)?))
     }
@@ -643,5 +649,41 @@ impl Style {
     #[must_use]
     pub fn row_height(self) -> f32 {
         (self.density.row_height() * self.scale).round()
+    }
+}
+
+#[cfg(test)]
+mod colour_parsing {
+    /// Parse one colour the way a settings file would supply it.
+    fn parse(value: &str) -> Result<iced::Color, String> {
+        super::hex::deserialize(serde_json::Value::String(value.to_owned()))
+            .map_err(|e: serde_json::Error| e.to_string())
+    }
+
+    /// Six bytes is not six characters. The length test counts bytes, so these
+    /// reach the digit split, which used to halve a character and panic.
+    /// Found by the `settings` fuzz target.
+    #[test]
+    fn six_bytes_of_multibyte_text_is_refused_rather_than_crashing() {
+        for value in ["\u{65e5}\u{672c}", "\u{e9}\u{e9}\u{e9}", "\u{221a}\u{222b}"] {
+            assert!(
+                parse(value).is_err(),
+                "{value} is not a colour and must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_real_colour_still_parses() {
+        for value in ["#1a2b3c", "1a2b3c", "#FFFFFF"] {
+            assert!(parse(value).is_ok(), "{value} is a colour and must parse");
+        }
+    }
+
+    #[test]
+    fn wrong_length_and_non_hex_are_refused() {
+        for value in ["#12345", "#1234567", "", "zzzzzz"] {
+            assert!(parse(value).is_err(), "{value} must be refused");
+        }
     }
 }
