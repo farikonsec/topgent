@@ -41,3 +41,24 @@ fn the_scan_header_names_the_same_version_as_the_flag() {
         "the scan header must name {version}, got:\n{header}"
     );
 }
+
+/// `topgent stop 1` printed "this would stop systemd ... re-run with --yes".
+/// The enforcement crate refuses a protected process at the point of
+/// signalling, so the prompt was describing something that could not happen,
+/// and inviting the operator to try it. Found on a Linux lab host.
+#[test]
+fn stopping_the_init_process_is_refused_rather_than_offered() {
+    let output = Command::new(env!("CARGO_BIN_EXE_topgent"))
+        .args(["stop", "1"])
+        .output()
+        .expect("the binary runs");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("refusing pid 1"),
+        "pid 1 must be refused outright, got:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("--yes"),
+        "a protected process must not be offered behind a confirmation:\n{stderr}"
+    );
+}

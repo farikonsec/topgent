@@ -26,6 +26,16 @@ pub(crate) fn stop_command(args: &[String]) -> i32 {
     };
 
     let label = target.family.unwrap_or("unrecognised process");
+
+    // Asked before the prompt, not after it. The enforcement crate refuses a
+    // protected process at the point of signalling, but a prompt reading "this
+    // would stop systemd, re-run with --yes" invites an operator to try
+    // something that is never going to happen, and says the tool would do it.
+    if let Some(why) = topgent_enforce::protected_system_process(target) {
+        eprintln!("topgent stop: refusing pid {pid} ({}): {why}.", target.exe);
+        return 1;
+    }
+
     if !args.iter().any(|a| a == "--yes") {
         // The owner is asked for by name here rather than taken from the
         // sweep's cheap field, which is a placeholder on Windows. A consent

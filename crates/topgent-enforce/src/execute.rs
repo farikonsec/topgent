@@ -368,6 +368,52 @@ mod tests {
         }
     }
 
+    /// Pid 1 is the init system on every platform Topgent runs on. It was
+    /// refused nowhere but Windows: `protected_system_process` returned `None`
+    /// off Windows, so `topgent stop 1` offered to terminate systemd with an
+    /// ordinary confirmation. Ownership refuses it today only because init
+    /// belongs to root, which is no guard at all for a Topgent run as root.
+    /// Found on a Linux lab host.
+    #[test]
+    fn the_init_process_is_refused_on_every_platform() {
+        let target = process(1, None, 1_000, 0);
+        assert!(
+            crate::guard::protected_system_process(&target).is_some(),
+            "pid 1 must be refused before ownership is consulted"
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn the_kernel_and_init_are_refused_by_name_at_any_pid() {
+        // A container or a user session runs its own init at a pid that is not
+        // one, so the number alone is not enough.
+        for name in crate::guard::UNIX_CRITICAL {
+            let mut target = process(4321, Some(1), 1_000, 0);
+            target.name = name.to_owned();
+            assert!(
+                crate::guard::protected_system_process(&target).is_some(),
+                "not protected off Windows: {name}"
+            );
+        }
+
+        // The match is on the whole executable name, not a substring, so an
+        // agent is not protected for being called something similar.
+        for ordinary in [
+            "systemd-helper",
+            "my-launchd",
+            "initialise",
+            "kernel_taskbar",
+        ] {
+            let mut target = process(4321, Some(1), 1_000, 501);
+            target.name = ordinary.to_owned();
+            assert!(
+                crate::guard::protected_system_process(&target).is_none(),
+                "an ordinary process was treated as critical: {ordinary}"
+            );
+        }
+    }
+
     #[test]
     fn an_owner_the_platform_would_not_state_is_refused_before_any_signal() {
         // The failure this prevents: Windows reported uid zero for everything,

@@ -28,7 +28,7 @@ pub mod risk;
 
 pub use graph::{
     Agent, AgentEdge, AgentGraph, AgentId, Connector, Endpoint, IdentityKind, RejectReason,
-    Rejected, ResourceAccess, fold,
+    Rejected, ResourceAccess, fold, fold_with_home,
 };
 pub use inventory::{
     Asset, AssetId, AssetKind, Inventory, Relationship, agent_asset_id, build as build_inventory,

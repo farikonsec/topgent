@@ -50,6 +50,16 @@ pub(crate) const WINDOWS_CRITICAL: [&str; 8] = [
     "system",
 ];
 
+/// Processes the kernel or the init system owns off Windows.
+///
+/// `launchd` is pid 1 on macOS and `systemd` is pid 1 on Linux, so both are
+/// already covered by the pid test; they are named as well because a container
+/// or a user session can run either at another pid. `kthreadd` is the parent of
+/// every kernel thread and `kernel_task` is its macOS counterpart.
+#[cfg(not(windows))]
+pub(crate) const UNIX_CRITICAL: [&str; 5] =
+    ["systemd", "init", "launchd", "kthreadd", "kernel_task"];
+
 impl Guard {
     /// The guard for the process calling this.
     #[must_use]
@@ -129,8 +139,25 @@ pub fn protected_system_process(target: &process::ProcInfo) -> Option<&'static s
             return Some("stopping it would stop Windows itself");
         }
     }
+    // Pid 1 is the init system everywhere Topgent runs. Stopping it stops the
+    // machine, and the ownership check is not a substitute: it refuses because
+    // init belongs to root, so a Topgent run as root would sail past it. A
+    // response that can take the host down is not a response.
+    if target.pid == 1 {
+        return Some("that is the init process, and stopping it stops the machine");
+    }
     #[cfg(not(windows))]
-    let _ = target;
+    {
+        let name = target
+            .name
+            .rsplit(['/', '\\'])
+            .next()
+            .unwrap_or(&target.name)
+            .to_ascii_lowercase();
+        if UNIX_CRITICAL.contains(&name.as_str()) {
+            return Some("the operating system depends on it");
+        }
+    }
     None
 }
 

@@ -13,7 +13,7 @@
 use crate::fixtures;
 
 use crate::fixtures::{Stream, at, endpoint_subject, resource_subject};
-use topgent_core::{IdentityKind, RejectReason, fold};
+use topgent_core::{IdentityKind, RejectReason, fold, fold_with_home};
 use topgent_facts::{Access, Claim, Direction, Subject, Tri};
 
 #[test]
@@ -648,4 +648,62 @@ fn a_connection_keeps_the_largest_counter_any_collector_reported() {
         .find(|endpoint| endpoint.host == "github.com")
         .expect("the uncounted endpoint survives the fold");
     assert_eq!(uncounted.bytes, None);
+}
+
+/// Reachability names a credential `~/.aws/credentials` because that is what a
+/// person reads. The filesystem sensor names the same file
+/// `/home/testuser/.aws/credentials` because that is what the kernel saw. Keyed
+/// as written they were two resources, so a credential stayed "never touched"
+/// however often it was opened, and `CREDENTIAL_ACCESS` could not fire for
+/// anything under a home directory. Found on a Linux lab host with auditd
+/// live: the activity feed showed the read, the score never moved.
+#[test]
+fn a_credential_named_two_ways_is_one_resource() {
+    let facts = Stream::new(4242)
+        .seen("/usr/local/bin/claude", 501, "testuser")
+        .family("claude-code")
+        .reachable("~/.aws/credentials", Access::Read, true)
+        .touched("/home/testuser/.aws/credentials", Access::Read)
+        .build();
+
+    let g = fold_with_home(&facts, Some("/home/testuser"));
+    let agent = &g.agents[0];
+    let creds: Vec<_> = agent
+        .resources
+        .iter()
+        .filter(|r| r.path.contains(".aws/credentials"))
+        .collect();
+
+    assert_eq!(creds.len(), 1, "one file must not become two resources");
+    assert_eq!(creds[0].reachable, Tri::Yes, "reach must survive the join");
+    assert_eq!(
+        creds[0].observed,
+        Tri::Yes,
+        "an observed read must land on the resource reachability named"
+    );
+    assert!(
+        creds[0].sensitive,
+        "it is still a credential after the join"
+    );
+}
+
+/// The same join in the other direction, and for a path that is not under a
+/// home directory, which must be left exactly as it arrived.
+#[test]
+fn paths_outside_home_are_keyed_as_written() {
+    let facts = Stream::new(4243)
+        .seen("/usr/local/bin/claude", 501, "testuser")
+        .family("claude-code")
+        .touched("/etc/shadow", Access::Read)
+        .reachable("/etc/shadow", Access::Read, true)
+        .build();
+
+    let g = fold_with_home(&facts, Some("/home/testuser"));
+    let hits: Vec<_> = g.agents[0]
+        .resources
+        .iter()
+        .filter(|r| r.path == "/etc/shadow")
+        .collect();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].observed, Tri::Yes);
 }

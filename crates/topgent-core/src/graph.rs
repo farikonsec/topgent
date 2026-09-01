@@ -436,6 +436,32 @@ impl ResourceBuilder {
     }
 }
 
+/// One key per resource, whatever names it.
+///
+/// Reachability reports `~/.aws/credentials` because that is what a person
+/// reads. The filesystem sensor reports `/home/kali/.aws/credentials` because
+/// that is what the kernel saw. Keyed as written, those are two resources: the
+/// credential stays "never touched" however often it is opened, and
+/// `CREDENTIAL_ACCESS` can never fire for anything under a home directory, which
+/// is every credential in the catalogue.
+///
+/// The tilde form wins. It is the one already shown, and it keeps the account
+/// name out of a report.
+fn resource_key(path: &str, home: Option<&str>) -> String {
+    if path.starts_with("~/") {
+        return path.to_owned();
+    }
+    let Some(home) = home
+        .map(|home| home.trim_end_matches('/'))
+        .filter(|home| !home.is_empty())
+    else {
+        return path.to_owned();
+    };
+    match path.strip_prefix(home) {
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_owned(),
+    }
+}
 /// Fold a fact stream into an agent graph.
 ///
 /// Order-independent by construction: every collection is sorted before it is
@@ -443,6 +469,16 @@ impl ResourceBuilder {
 /// asserted directly in the test suite.
 #[must_use]
 pub fn fold(facts: &[Fact]) -> AgentGraph {
+    fold_with_home(facts, std::env::var("HOME").ok().as_deref())
+}
+
+/// The fold, with the home directory supplied rather than read.
+///
+/// The one impure edge of the core is which directory `~` stands for. Taking it
+/// as an argument keeps the fold a pure function of its input, which is what
+/// lets the suite replay fact streams without an operating system under them.
+#[must_use]
+pub fn fold_with_home(facts: &[Fact], home: Option<&str>) -> AgentGraph {
     let mut builders: BTreeMap<AgentId, Builder> = BTreeMap::new();
     let mut rejected = Vec::new();
 
@@ -476,7 +512,7 @@ pub fn fold(facts: &[Fact]) -> AgentGraph {
             })
             .or_insert_with(|| fact.confidence());
 
-        apply(b, fact);
+        apply(b, fact, home);
     }
 
     let mut agents: Vec<Agent> = builders.into_iter().map(|(id, b)| finish(id, b)).collect();
@@ -487,7 +523,7 @@ pub fn fold(facts: &[Fact]) -> AgentGraph {
     AgentGraph { agents, rejected }
 }
 
-fn apply(b: &mut Builder, fact: &Fact) {
+fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
     let probe = fact.provenance().probe.as_str();
     match fact.claim() {
         Claim::ProcessSeen {
@@ -548,7 +584,7 @@ fn apply(b: &mut Builder, fact: &Fact) {
         | Claim::ConnectionAttempt { .. }
         | Claim::DnsQueryObserved { .. } => {}
         Claim::FileTouched { path, access } => {
-            let r = b.resources.entry(path.clone()).or_default();
+            let r = b.resources.entry(resource_key(path, home)).or_default();
             r.observed = Tri::Yes;
             r.widen(*access);
             r.note(probe);
@@ -559,7 +595,7 @@ fn apply(b: &mut Builder, fact: &Fact) {
             granted,
         } => {
             b.has_declared_permissions = true;
-            let r = b.resources.entry(path.clone()).or_default();
+            let r = b.resources.entry(resource_key(path, home)).or_default();
             r.declared = if *granted { Tri::Yes } else { Tri::No };
             if *granted {
                 r.widen(*access);
@@ -571,7 +607,7 @@ fn apply(b: &mut Builder, fact: &Fact) {
             access,
             sensitive,
         } => {
-            let r = b.resources.entry(path.clone()).or_default();
+            let r = b.resources.entry(resource_key(path, home)).or_default();
             r.reachable = Tri::Yes;
             r.sensitive |= *sensitive;
             r.widen(*access);
