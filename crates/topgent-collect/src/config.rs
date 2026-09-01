@@ -60,7 +60,15 @@ pub fn parse_permission_rule(rule: &str) -> Option<(String, Access)> {
         "Read" | "Glob" | "Grep" => Access::Read,
         _ => return None,
     };
-    Some((arg.trim().to_owned(), access))
+    // `Bash()` names no path. A bare `Bash` means every path and says so above;
+    // empty parentheses are malformed, and the safe reading of a malformed
+    // grant is no grant. Widening it to `*` would turn a typo into permission
+    // over everything, which is the wrong direction to guess in.
+    let arg = arg.trim();
+    if arg.is_empty() {
+        return None;
+    }
+    Some((arg.to_owned(), access))
 }
 
 fn claude_facts(subject: &Subject, clock: &dyn Clock, home: &Path, facts: &mut Vec<Fact>) {
@@ -257,5 +265,44 @@ impl Collector for ConfigCollector {
             }
         }
         Ok(facts)
+    }
+}
+
+#[cfg(test)]
+mod permission_rules {
+    use super::{Access, parse_permission_rule};
+
+    /// `Bash()` names nothing. Reported by the `config` fuzz target, which
+    /// asserts that no rule it accepts carries an empty path.
+    #[test]
+    fn a_rule_naming_no_path_is_refused() {
+        for rule in ["Bash()", "Write()", "Read(  )", "Edit(\t)", "Glob()"] {
+            assert!(
+                parse_permission_rule(rule).is_none(),
+                "{rule} names no path and must not become a grant"
+            );
+        }
+    }
+
+    /// The bare form is the one that means everything, and it still does.
+    #[test]
+    fn a_bare_tool_still_means_every_path() {
+        assert_eq!(
+            parse_permission_rule("Bash"),
+            Some(("*".to_owned(), Access::Execute))
+        );
+    }
+
+    #[test]
+    fn ordinary_rules_are_unchanged() {
+        assert_eq!(
+            parse_permission_rule("Bash(cargo *)"),
+            Some(("cargo *".to_owned(), Access::Execute))
+        );
+        assert_eq!(
+            parse_permission_rule("Write(/tmp/**)"),
+            Some(("/tmp/**".to_owned(), Access::Write))
+        );
+        assert!(parse_permission_rule("Unknown(x)").is_none());
     }
 }
