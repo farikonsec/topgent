@@ -1,0 +1,21 @@
+[package]
+name = "topgent-export"
+description = "Portable CycloneDX AI-BOM projection and CI policy evaluation contracts."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+topgent-core = { path = "../topgent-core" }
+topgent-policy = { path = "../topgent-policy" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+topgent-facts = { path = "../topgent-facts" }
+
+[lints]
+workspace = true

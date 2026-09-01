@@ -1,0 +1,32 @@
+[workspace]
+resolver = "3"
+members = ["crates/topgent-facts", "crates/topgent-policy", "crates/topgent-core", "crates/topgent-collect", "crates/topgent-enforce", "crates/topgent-journal", "crates/topgent-export", "crates/topgent-report", "crates/topgent-lab", "crates/topgent-cli", "crates/topgent-ui"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "Apache-2.0"
+repository = "https://github.com/farikonsec/topgent"
+# Distribution is through GitHub Releases, not crates.io. Declaring this
+# prevents accidental publication and lets cargo-deny treat the inter-crate
+# path dependencies as internal rather than as wildcard registry versions.
+publish = false
+
+[workspace.lints.rust]
+# `fuzzing` is set by cargo-fuzz, which builds outside this workspace. Declared
+# so the compiler knows it is a real condition rather than a typo.
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuzzing)'] }
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
+[profile.test]
+opt-level = 1

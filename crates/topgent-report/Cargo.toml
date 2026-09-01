@@ -1,0 +1,22 @@
+[package]
+name = "topgent-report"
+description = "Orchestrates a sweep into the one JSON shape every front end consumes: CLI, viewer, and the desktop app."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+topgent-core = { path = "../topgent-core" }
+topgent-policy = { path = "../topgent-policy" }
+topgent-facts = { path = "../topgent-facts" }
+topgent-collect = { path = "../topgent-collect" }
+topgent-enforce = { path = "../topgent-enforce" }
+topgent-journal = { path = "../topgent-journal" }
+topgent-export = { path = "../topgent-export" }
+serde_json = "1"
+
+[lints]
+workspace = true

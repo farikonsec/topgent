@@ -1,0 +1,74 @@
+# cargo-deny configuration.
+#
+# osv-scanner covers known vulnerabilities. This file covers the questions it
+# does not answer: whether a dependency's licence is acceptable, whether a crate
+# is unmaintained, and whether the same crate is linked at two versions.
+#
+# The two tools do not overlap the way it looks. Measured 2026-08-31: with every
+# ignore removed, cargo-deny reports the three unmaintained advisories in this
+# tree and does not report the `unsound` one at all. Its v2 advisories config
+# has no switch for that class, so **osv-scanner is the only gate covering
+# unsound advisories**, and a finding of that class would pass this file in
+# silence. Anyone reading a green cargo-deny as full coverage is reading it
+# wrong, which is why it is written down here.
+#
+# Accepted advisories are listed in osv-scanner.toml with their reasons. This
+# file references the same identifiers rather than restating the reasoning.
+
+[graph]
+all-features = false
+
+[advisories]
+version = 2
+yanked = "deny"
+ignore = [
+  # See osv-scanner.toml for the reasoning on each. All three arrive with the
+  # interface toolkit; the seventeen that arrived with Tauri left when it did.
+  #
+  # RUSTSEC-2026-0253 is deliberately absent: this tool does not report it, and
+  # an ignore that matches nothing is a claim that something was considered
+  # here when it was not. It is accepted in osv-scanner.toml, which is the only
+  # tool that raises it.
+  "RUSTSEC-2026-0206", "RUSTSEC-2026-0192", "RUSTSEC-2024-0436",
+]
+
+[licenses]
+version = 2
+# Permissive licences only. Topgent is Apache-2.0. A copyleft dependency would
+# impose terms the project does not state.
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "MIT-0",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  "MPL-2.0",
+  "BSL-1.0",
+  "OpenSSL",
+  # University of Illinois/NCSA Open Source License. Permissive, MIT-and-BSD
+  # shaped, used by the LLVM project. Arrives with the fuzzing harness the
+  # toolkit's font stack builds against.
+  "NCSA",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of one crate in a single binary is a size and correctness
+# problem, not a licence one. Reported, not fatal: the Tauri tree contains
+# several and resolving them is not within this project's control.
+multiple-versions = "warn"
+# A wildcard version on a registry crate accepts whatever that registry serves.
+# Path dependencies inside this workspace carry no version by construction and
+# resolve to the checked-out source, so they are exempt.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

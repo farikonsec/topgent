@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Topgent</title>
+<meta name="topgent-token" content="__TOPGENT_TOKEN__">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header>
+  <span class="brand">
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v6a10 10 0 0 0 10 10h6"/><circle cx="17.5" cy="6.5" r="3"/></svg>
+    Topgent
+  </span>
+  <span class="live"><i id="beat"></i><span id="host">Live</span></span>
+  <span class="mono faint" id="meta"></span>
+  <span style="flex:1 1 auto"></span>
+  <button id="themeBtn" class="btn quiet" type="button" aria-pressed="false">☀ Bright mode</button>
+  <button id="ciBtn" class="btn quiet" title="How to run Topgent policy checks in CI">8 · CI policy</button>
+  <button id="legendBtn" class="btn quiet">Rules &amp; legend</button>
+  <button id="soundBtn" class="btn quiet" title="Alerts: sound, toast and system notification. The event log keeps every finding either way.">🔔 On</button>
+  <button id="reset" class="btn quiet">Reset view</button>
+  <button id="pause" class="btn">Pause</button>
+</header>
+
+<section class="threat-rail" aria-label="Current threat posture">
+  <div class="rail-cell"><div class="rail-label">Posture</div><div class="rail-value small" id="posture">Collecting evidence…</div><div class="rail-note" id="postureNote">Metadata only · no traffic decryption</div></div>
+  <div class="rail-cell"><div class="rail-label">Critical agents</div><div class="rail-value" id="railCritical">0</div><div class="rail-note">Require immediate review</div></div>
+  <div class="rail-cell"><div class="rail-label">Rogue signals</div><div class="rail-value" id="railSignals">0</div><div class="rail-note">Active behavioural factors</div></div>
+  <div class="rail-cell"><div class="rail-label">Agents detected</div><div class="rail-value" id="railEstate">0</div><div class="rail-note" id="railEstateNote">0 evidence points</div></div>
+</section>
+
+<div class="workspace">
+<main>
+  <!-- agents -->
+  <div class="panel" id="panel-agents" data-view="agents">
+    <div class="head">
+      <h2>Agents</h2>
+      <span class="count" id="agentCount"></span>
+      <span class="spacer"></span>
+      <div class="toolbar">
+        <div class="export-control" role="group" aria-label="Export AI-BOM">
+          <span class="export-label"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>AI-BOM</span>
+          <button class="btn primary" id="exportAibomHtml" title="Download a self-contained, human-readable AI inventory">HTML report</button>
+          <button class="btn" id="exportAibomJson" title="Download the machine-readable CycloneDX 1.6 document">JSON</button>
+        </div>
+        <span class="fchip" data-risk="all" aria-pressed="true">All</span>
+        <span class="fchip" data-risk="CRITICAL">Critical<span class="n" id="nCrit">0</span></span>
+        <span class="fchip" data-risk="HIGH">High<span class="n" id="nHigh">0</span></span>
+        <span class="fchip" data-risk="MEDIUM">Medium<span class="n" id="nMed">0</span></span>
+        <span class="fchip" data-risk="LOW">Low<span class="n" id="nLow">0</span></span>
+        <label class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+          <input id="agentSearch" placeholder="Search agents, model, PID…" autocomplete="off">
+        </label>
+      </div>
+    </div>
+    <div class="body resizable" id="agentsBody" style="max-height:46vh"></div>
+  </div>
+
+  <!-- risk + blast radius -->
+  <div class="cols2" data-panel-group>
+    <div class="panel" id="panel-risk" data-view="risk" hidden>
+      <div class="head"><h2 id="riskTitle">Risk</h2><span class="count" id="riskSub"></span></div>
+      <div class="body resizable" id="risk" style="min-height:220px"></div>
+    </div>
+    <div class="panel" id="panel-blast" data-view="blast" hidden>
+      <div class="head"><h2>Blast radius</h2><span class="count" id="blastSub"></span></div>
+      <div class="body resizable" id="blast" style="min-height:220px"></div>
+    </div>
+  </div>
+
+  <!-- access + events -->
+  <div class="cols2" data-panel-group>
+    <div class="panel" id="panel-access" data-view="access" hidden>
+      <div class="head"><h2>Access</h2><span class="count">declared · observed · reachable</span></div>
+      <div class="body resizable" id="access" style="min-height:200px"></div>
+    </div>
+    <div class="panel" id="panel-events" data-view="events" hidden>
+      <div class="head">
+        <h2>Event log</h2>
+        <span class="count" id="eventCount"></span>
+        <span class="spacer"></span>
+        <div class="toolbar">
+          <select id="eventKind" class="btn quiet" style="height:28px">
+            <option value="all">All events</option>
+            <option value="started">Started</option>
+            <option value="stopped">Stopped</option>
+            <option value="grade_changed">Risk changed</option>
+            <option value="credential_exposed">Credential exposed</option>
+            <option value="policy_breach">Out of policy</option>
+            <option value="recon">Scanning</option>
+            <option value="behaviour">Rogue behaviour</option>
+            <option value="model_drift">Model drift</option>
+            <option value="action">Action</option>
+          </select>
+          <label class="search">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+            <input id="eventSearch" placeholder="Search events…" autocomplete="off">
+          </label>
+        </div>
+      </div>
+      <div class="body resizable" id="events" style="min-height:200px"></div>
+    </div>
+  </div>
+
+  <!-- current evidence projection; separate from the persisted cross-sweep event log -->
+  <div class="panel" id="panel-activity" data-view="activity" hidden>
+    <div class="head"><h2>Activity path</h2><span class="count" id="activityCount"></span></div>
+    <div class="body resizable" id="activity" style="min-height:220px"></div>
+  </div>
+
+  <div class="panel" id="panel-network" data-view="network" hidden>
+    <div class="head">
+      <h2>Network activity</h2><span class="count" id="networkCount"></span><span class="spacer"></span>
+      <div class="toolbar">
+        <button class="btn quiet" id="networkBaselineReset" disabled title="Select an agent with retained network history">↻ Reset selected baseline</button>
+        <select id="networkDirection" class="btn quiet" style="height:28px">
+          <option value="all">All directions</option><option value="outbound">Outbound</option><option value="listening">Listening</option>
+        </select>
+        <label class="search"><input id="networkSearch" placeholder="Search host, port, verdict…" autocomplete="off"></label>
+      </div>
+    </div>
+    <div class="body resizable" id="network" style="min-height:220px"></div>
+  </div>
+
+  <div class="panel" id="panel-health" data-view="health" hidden>
+    <div class="head"><h2>Sensor health &amp; detection coverage</h2><span class="count" id="healthCount"></span></div>
+    <div class="body resizable" id="health" style="min-height:260px"></div>
+  </div>
+
+  <div class="panel" id="panel-response" data-view="response" hidden>
+    <div class="head"><h2>Response &amp; governance queue</h2><span class="count" id="responseCount"></span></div>
+    <div class="body resizable" id="response" style="min-height:220px"></div>
+  </div>
+
+  <div class="panel" id="panel-context" data-view="context" hidden>
+    <div class="head">
+      <h2>Optional session context</h2><span class="count" id="contextCount"></span><span class="spacer"></span>
+      <button class="btn quiet" id="contextToggle">Enable context</button>
+      <button class="btn quiet" id="contextClear">Delete retained context</button>
+    </div>
+    <div class="body resizable" id="context" style="min-height:220px"></div>
+  </div>
+
+  <!-- the same typed inventory later exported as CycloneDX -->
+  <div class="panel" id="panel-assets" data-view="assets" hidden>
+    <div class="head">
+      <h2>Agents &amp; assets</h2>
+      <span class="count" id="assetCount"></span>
+      <span class="spacer"></span>
+      <div class="toolbar">
+        <select id="assetKind" class="btn quiet" style="height:28px">
+          <option value="all">All asset types</option>
+          <option value="agent">Agents</option>
+          <option value="model">Models</option>
+          <option value="connector">Connectors</option>
+          <option value="endpoint">Endpoints</option>
+          <option value="tool">Tools</option>
+        </select>
+        <label class="search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
+          <input id="assetSearch" placeholder="Search assets…" autocomplete="off">
+        </label>
+      </div>
+    </div>
+    <div class="body resizable" id="assets" style="min-height:220px"></div>
+  </div>
+</main>
+<aside class="view-nav" aria-label="Dashboard views">
+  <div class="view-nav-head"><strong>Inspect</strong></div>
+  <div class="view-nav-actions"><button class="btn quiet" id="openAllViews">Open all</button><button class="btn quiet" id="closeAllViews">Close all</button></div>
+  <nav class="view-nav-list" id="viewNav"></nav>
+</aside>
+</div>
+
+<div id="legendScrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="legendTitle" style="width:700px">
+    <div class="modal-head"><div><h3 id="legendTitle">Rules &amp; scoring legend</h3><div class="muted" style="font-size:12px">Every factor is added to a 0–100 score. Bands: Low &lt;35 · Medium 35–59 · High 60–79 · Critical 80+.</div></div></div>
+    <div class="modal-body" style="max-height:52vh;overflow:auto;padding:0">
+      <div id="legendList"></div>
+    </div>
+    <div class="modal-head" style="padding-top:16px"><div><h3 style="font-size:15px">Your watchlist</h3><div class="muted" style="font-size:12px">Add a path to raise an agent's risk when it can reach, reads, or writes there. No rule syntax — just pick.</div></div></div>
+    <div class="modal-body">
+      <div id="watchList" style="margin-bottom:10px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="wPath" class="search" style="flex:1 1 200px" placeholder="~/path/to/watch or /etc/…">
+        <select id="wCond" class="btn quiet" style="height:28px">
+          <option value="reachable">can reach</option>
+          <option value="observed">has touched</option>
+          <option value="write">can write to</option>
+        </select>
+        <select id="wSev" class="btn quiet" style="height:28px">
+          <option value="critical">→ Critical</option>
+          <option value="40">+40 (High)</option>
+          <option value="20">+20</option>
+        </select>
+        <button id="wAdd" class="btn danger">Add</button>
+      </div>
+    </div>
+    <div class="modal-foot"><span class="mono faint" style="flex:1 1 auto">Saved to your machine only.</span><button class="btn" id="legendClose">Close</button></div>
+  </div>
+</div>
+
+<div id="ciScrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ciTitle" style="width:650px">
+    <div class="modal-head"><div><h3 id="ciTitle">CI policy evaluation</h3><div class="muted" style="font-size:12px">Run the same Rust-owned policy checks without opening the desktop app or using a hosted service.</div></div></div>
+    <div class="modal-body">
+      <div class="context-note" style="border:1px solid var(--bd);margin-bottom:12px"><strong>Current release capability. </strong>Item 8 is automation rather than another live dashboard. It reads a fresh scan or saved report and returns a meaningful process exit code.</div>
+      <div class="mono" style="padding:12px;border:1px solid var(--bd2);background:var(--bg);overflow:auto;white-space:pre">topgent --json &gt; topgent-report.json
+topgent policy check --input topgent-report.json \
+  --threshold high --require-coverage --json</div>
+      <div class="response-cap" style="padding:12px 0 0;border:0">
+        <span class="response-step on">0 · pass</span><span class="response-step off">1 · violation</span><span class="response-step off">2 · invalid/error</span><span class="response-step off">3 · coverage missing</span>
+      </div>
+    </div>
+    <div class="modal-foot"><span class="mono faint" style="flex:1 1 auto">Local · deterministic · no Docker</span><button class="btn" id="ciClose">Close</button></div>
+  </div>
+</div>
+
+<div id="scrim" hidden>
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="mTitle">
+    <div class="modal-head">
+      <span class="modal-icon" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"><path d="M12 3v9"/><path d="M6.5 6.8a8 8 0 1 0 11 0"/></svg></span>
+      <div><h3 id="mTitle">Stop this agent?</h3><div class="mono muted" id="mSub"></div></div>
+    </div>
+    <div class="modal-body">
+      <ol class="steps">
+        <li>Sends SIGTERM.</li>
+        <li>Waits 5 seconds, then sends SIGKILL if it is still running.</li>
+        <li>Re-checks the process identity before signalling, so a reused PID is not hit.</li>
+        <li>No other process is affected.</li>
+      </ol>
+      <p class="warn">Unsaved work in this process will be lost.</p>
+    </div>
+    <div class="modal-foot">
+      <span class="mono faint" style="flex:1 1 auto">Written to the event log either way.</span>
+      <button class="btn" id="mCancel">Cancel</button>
+      <button class="btn danger" id="mGo">Stop</button>
+    </div>
+  </div>
+</div>
+
+
+<script type="module" src="app.mjs"></script>
+</body>
+</html>

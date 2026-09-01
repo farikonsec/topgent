@@ -1,0 +1,61 @@
+# Accepted dependency advisories.
+#
+# Seventeen were accepted here until 2026-08-31, every one reached through
+# Tauri: the gtk-rs GTK3 stack its Linux webview required, and the unmaintained
+# crates below it. Replacing the webview with a native interface removed the
+# dependency and those advisories with it, rather than continuing to explain
+# them. Four arrive with the toolkit that replaced it, and are listed below.
+#
+# Entries are added only when a finding cannot be fixed from this repository,
+# and each carries the reason next to it. Review whenever the toolkit is
+# upgraded: an entry that has become fixable is a bug in this file.
+
+# ---------------------------------------------------------------------------
+# lru: use-after-free through a panicking Drop, unreachable by construction.
+#
+# The advisory is precise about what it needs: `LruCache::pop()` is not
+# panic-safe, and if the Drop implementation of a stored *key* panics, the node
+# is freed from the map while still linked in the list, and a later eviction
+# writes to freed memory.
+#
+# The key here is `cosmic_text::CacheKey`, which derives `Copy`. A `Copy` type
+# cannot implement `Drop`: the compiler refuses it. So there is no Drop to
+# panic, and the precondition the advisory names cannot be met on this path.
+# That is a proof rather than a judgement, which is why this is accepted rather
+# than worked around.
+#
+# The fix landed in lru 0.18.2 and 0.18.3 is current. It cannot be taken from
+# here: `cryoglyph` requires `lru = "0.16"`, and reaching 0.18 means forcing two
+# breaking releases through a transitive dependency with `[patch.crates-io]`.
+# Forcing an API two majors forward under a renderer, to close a path that is
+# already unreachable, would trade a proven non-issue for an unproven one.
+#
+# Re-check when the toolkit's text cache moves. Verified 2026-08-31 against the
+# advisory text and the key's own derive list.
+# ---------------------------------------------------------------------------
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0253"
+reason = "lru: the key is Copy, so it has no Drop to panic; the advisory's precondition cannot be met"
+
+# ---------------------------------------------------------------------------
+# Unmaintained crates in the text and vector rendering path. Notices, not
+# defects: none of the three names a memory-safety or correctness fault.
+#
+# All three sit at the newest version their author published, so there is
+# nothing to upgrade to and nothing this repository can do. Checked against
+# crates.io on 2026-08-31: rustybuzz 0.20.1 last released 2024-11-12,
+# ttf-parser 0.25.1 on 2024-11-29, paste 1.0.15 on 2024-05-07. An entry here
+# that has become fixable is a bug in this file, so the versions are recorded
+# to make that easy to see.
+# ---------------------------------------------------------------------------
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0206"
+reason = "rustybuzz: unmaintained text shaper, reached through the toolkit's SVG renderer"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0192"
+reason = "ttf-parser: unmaintained font parser, same path as rustybuzz"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2024-0436"
+reason = "paste: unmaintained macro helper, build-time only, no runtime surface"

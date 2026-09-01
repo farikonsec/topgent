@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "source": "topgent-built-in",
+  "offensive_tools": [
+    "nmap",
+    "nc",
+    "ncat",
+    "netcat",
+    "masscan",
+    "sqlmap",
+    "sqlmap.py",
+    "hydra",
+    "medusa"
+  ],
+  "suspicious_ports": [1337, 4444, 5555, 6666, 9001],
+  "metadata_hosts": [
+    "169.254.169.254",
+    "metadata.google.internal"
+  ],
+  "persistence_markers": [
+    {"match": "contains", "value": "/launchagents/"},
+    {"match": "contains", "value": "/launchdaemons/"},
+    {"match": "suffix", "value": "/.zshrc"},
+    {"match": "suffix", "value": "/.bashrc"},
+    {"match": "contains", "value": "/cron"},
+    {"match": "contains", "value": "/systemd/"}
+  ]
+}

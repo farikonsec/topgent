@@ -1,0 +1,1 @@
+{"contract_version":1,"agents":[{"asset_id":"urn:topgent:agent:fixture","pid":42,"grade":"CRITICAL"}],"assets":[{"id":"urn:topgent:model:fixture","kind":"model","disposition":"disallowed"}],"coverage":[{"rule":"FIXTURE","state":"available"}]}

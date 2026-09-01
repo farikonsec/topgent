@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Current stable is where the lints and the full suite run. A project that
+  # only ever builds on its own floor never finds out that the language moved.
+  rust:
+    name: Rust contracts (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2.9.2
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo build --workspace --release --locked
+      # Windows on ARM is a supported target and cannot be executed by the
+      # x64 runner, so it is compiled rather than tested here. The release
+      # workflow builds it for real.
+      - name: Windows on ARM compiles
+        if: runner.os == 'Windows'
+        run: |
+          rustup target add aarch64-pc-windows-msvc
+          cargo check --workspace --locked --target aarch64-pc-windows-msvc
+      - name: Interface alert rules and shipped/development parity
+        shell: bash
+        run: |
+          set -eu
+          node --check viewer/serve.mjs
+          node --test viewer/alerts.test.mjs
+      - name: Exercise report, health and AI-BOM surfaces
+        shell: bash
+        run: |
+          set -eu
+          if [ "$RUNNER_OS" = Windows ]; then
+            binary=target/release/topgent.exe
+          else
+            binary=target/release/topgent
+          fi
+          "$binary" --json > topgent-report.json
+          "$binary" doctor --json > topgent-doctor.json || true
+          "$binary" export cyclonedx --output topgent.cdx.json
+          "$binary" export cyclonedx --format html --output topgent-aibom.html
+          test -s topgent-report.json
+          test -s topgent-doctor.json
+          test -s topgent.cdx.json
+          test -s topgent-aibom.html
+      - name: Exercise offline CI-policy fixture matrix
+        shell: bash
+        run: |
+          set -eu
+          if [ "$RUNNER_OS" = Windows ]; then
+            binary=target/release/topgent.exe
+          else
+            binary=target/release/topgent
+          fi
+          fixtures=crates/topgent-cli/tests/fixtures/policy
+          "$binary" policy check --input "$fixtures/pass/topgent-report.json" --require-coverage --json
+          check_exit() {
+            expected=$1
+            shift
+            set +e
+            "$binary" policy check --input "$fixtures/$1/topgent-report.json" --require-coverage --json >/dev/null 2>&1
+            actual=$?
+            set -e
+            test "$actual" = "$expected"
+          }
+          check_exit 1 violation
+          check_exit 3 incomplete
+          check_exit 2 error
+
+  # The floor the README promises. Build and test only: Clippy's lint set moves
+  # between releases, and failing the oldest supported compiler over a lint that
+  # did not exist when it shipped would say nothing about whether the code runs.
+  #
+  # 1.88 is where let-chains stabilised, and the collectors use them in 146
+  # places. The manifests claimed 1.85 until this job proved otherwise.
+  msrv:
+    name: Minimum supported Rust (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+      - uses: Swatinem/rust-cache@v2.9.2
+      - run: cargo test --workspace --locked

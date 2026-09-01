@@ -1,0 +1,24 @@
+[package]
+name = "topgent-core"
+description = "The pure fold from a fact stream to an agent graph, and the risk model over it. No I/O."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+autotests = false
+
+[dependencies]
+topgent-facts = { path = "../topgent-facts" }
+topgent-policy = { path = "../topgent-policy" }
+
+[lints]
+workspace = true
+
+# One integration-test binary. Separate binaries each link their own copy of the
+# crate, which splits the coverage profile across instantiations and reports
+# tested code as untested.
+[[test]]
+name = "suite"
+path = "tests/suite/main.rs"

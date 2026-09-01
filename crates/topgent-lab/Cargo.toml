@@ -1,0 +1,16 @@
+[package]
+name = "topgent-lab"
+description = "Deterministic acceptance gates for disposable agent-family validation."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

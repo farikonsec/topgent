@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "source": "topgent-built-in",
+  "sensitive_paths": [
+    {"path": ".ssh/id_ed25519", "label": "ssh private key"},
+    {"path": ".ssh/id_rsa", "label": "ssh private key"},
+    {"path": ".aws/credentials", "label": "cloud credentials"},
+    {"path": ".config/gcloud/credentials.db", "label": "cloud credentials"},
+    {"path": ".kube/config", "label": "cluster credentials"},
+    {"path": ".npmrc", "label": "registry token"},
+    {"path": ".netrc", "label": "stored logins"},
+    {"path": ".config/gh/hosts.yml", "label": "github token"}
+  ]
+}

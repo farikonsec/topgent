@@ -1,0 +1,16 @@
+[package]
+name = "topgent-policy"
+description = "Topgent's detection policy as data: scoring weights, thresholds, watched paths and user watchlist rules, loaded from one config file."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

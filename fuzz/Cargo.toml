@@ -1,0 +1,92 @@
+# Fuzz targets for every parser that reads something Topgent did not write.
+#
+# Not a workspace member: a fuzz target needs a nightly compiler and a
+# sanitiser, and neither belongs in the build a user runs. `cargo fuzz` finds
+# this directory on its own.
+# Deliberately outside the workspace: these need a nightly compiler and a
+# sanitiser, and neither belongs in the build a user runs.
+[workspace]
+
+[package]
+name = "topgent-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+topgent-collect = { path = "../crates/topgent-collect" }
+topgent-facts = { path = "../crates/topgent-facts" }
+topgent-ui = { path = "../crates/topgent-ui" }
+topgent-policy = { path = "../crates/topgent-policy" }
+topgent-export = { path = "../crates/topgent-export" }
+serde_json = "1"
+
+[[bin]]
+name = "lsof"
+path = "fuzz_targets/lsof.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "netstat"
+path = "fuzz_targets/netstat.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ss"
+path = "fuzz_targets/ss.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "audit"
+path = "fuzz_targets/audit.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "sockaddr"
+path = "fuzz_targets/sockaddr.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "session_export"
+path = "fuzz_targets/session_export.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ownership"
+path = "fuzz_targets/ownership.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "report"
+path = "fuzz_targets/report.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "text"
+path = "fuzz_targets/text.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "settings"
+path = "fuzz_targets/settings.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "config"
+path = "fuzz_targets/config.rs"
+test = false
+doc = false

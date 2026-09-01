@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "source": "topgent-built-in",
+  "factors": [
+    {
+      "code": "SANDBOX_ESCAPE",
+      "points": 100,
+      "tunable": false,
+      "description": "A sandboxed agent is acting outside its sandbox.",
+      "remedy": "Stop it now: a sandboxed agent is acting outside its sandbox",
+      "remedy_where": "declared sandbox vs observed behaviour",
+      "atlas_id": "AML.T0054",
+      "atlas_description": "Evade sandboxing / act beyond declared confinement",
+      "sensor": "socket",
+      "verification": "automated",
+      "coverage_ceiling": "degraded"
+    },
+    {
+      "code": "RECON_FANOUT",
+      "points": 60,
+      "description": "Live connections look like scanning a network or host.",
+      "remedy": "Investigate now: this connection pattern is what scanning looks like",
+      "remedy_where": "the agent's live sockets",
+      "atlas_id": "AML.T0007",
+      "atlas_description": "Discovery: scanning for reachable services",
+      "sensor": "socket",
+      "verification": "live"
+    },
+    {
+      "code": "ARBITRARY_EXECUTION",
+      "points": 30,
+      "description": "Can run arbitrary commands.",
+      "remedy": "Deny shell and grant only the commands it needs",
+      "remedy_where": "agent config",
+      "atlas_id": "AML.T0050",
+      "atlas_description": "Command and scripting interpreter",
+      "sensor": "config",
+      "verification": "automated"
+    },
+    {
+      "code": "BROAD_WRITE",
+      "points": 20,
+      "description": "Can write outside anything it declared.",
+      "remedy": "Narrow the write grant to one directory",
+      "remedy_where": "agent config",
+      "atlas_id": "AML.T0052",
+      "atlas_description": "Persistence / tampering via broad file write",
+      "sensor": "config",
+      "verification": "automated"
+    },
+    {
+      "code": "UNRESTRICTED_NETWORK",
+      "points": 15,
+      "description": "Reaches many destinations with no egress policy.",
+      "remedy": "Add an egress allowlist for its model endpoint",
+      "remedy_where": "collector policy",
+      "atlas_id": "AML.T0072",
+      "atlas_description": "Unrestricted exfiltration channel",
+      "sensor": "socket",
+      "verification": "live"
+    },
+    {
+      "code": "SECRET_REACHABLE",
+      "points": 15,
+      "subsequent_points": 12,
+      "description": "A credential is readable by this agent (first is worth more).",
+      "remedy": "Move the credential where this owner cannot read it",
+      "remedy_where": "filesystem",
+      "atlas_id": "AML.T0055",
+      "atlas_description": "Unsecured credentials within reach",
+      "sensor": "reach",
+      "verification": "live"
+    },
+    {
+      "code": "EXFILTRATION_PATH",
+      "points": 12,
+      "description": "Shell plus a reachable credential is a complete path out.",
+      "remedy": "Break the chain: deny shell, or move the credential out of reach",
+      "remedy_where": "agent config",
+      "atlas_id": "AML.T0025",
+      "atlas_description": "Exfiltration via a reachable credential and outbound path",
+      "sensor": "reach",
+      "verification": "automated"
+    },
+    {
+      "code": "AGENT_CHAIN",
+      "points": 12,
+      "description": "Can invoke another agent, extending its reach a second hop.",
+      "remedy": "Remove the connector that reaches the other agent",
+      "remedy_where": "agent config",
+      "atlas_id": "AML.T0053",
+      "atlas_description": "Lateral movement to another agent",
+      "sensor": "config",
+      "verification": "automated"
+    },
+    {
+      "code": "DECLARATION_DRIFT",
+      "points": 10,
+      "description": "Touched a resource its own config never granted.",
+      "remedy": "Either grant the path or find out why it was touched",
+      "remedy_where": "agent config",
+      "atlas_id": "AML.T0051",
+      "atlas_description": "Access beyond declared scope",
+      "sensor": "filesystem_events",
+      "verification": "unavailable"
+    },
+    {
+      "code": "WATCHLIST",
+      "points": 100,
+      "tunable": false,
+      "description": "Matched a local path rule you defined; critical rules force the score to 100.",
+      "remedy": "Review or remove the watchlist rule that matched",
+      "remedy_where": "your watchlist",
+      "atlas_id": "",
+      "atlas_description": "Matched a rule you defined",
+      "sensor": "reach",
+      "verification": "degraded",
+      "coverage_ceiling": "degraded"
+    },
+    {
+      "code": "EXPOSED_LISTENER",
+      "points": 35,
+      "description": "Exposes a listening socket beyond loopback.",
+      "remedy": "Close or bind the listener to loopback",
+      "remedy_where": "the agent's listening sockets",
+      "atlas_id": "T1090",
+      "atlas_description": "Proxy or backdoor listener exposed",
+      "sensor": "socket",
+      "verification": "live"
+    },
+    {
+      "code": "OFFENSIVE_TOOL",
+      "points": 60,
+      "description": "A known offensive utility is running below the agent.",
+      "remedy": "Stop the agent and inspect why it launched the tool",
+      "remedy_where": "the agent's process tree",
+      "atlas_id": "T1059",
+      "atlas_description": "Command and scripting tool execution",
+      "sensor": "process",
+      "verification": "live"
+    },
+    {
+      "code": "PROCESS_EXPLOSION",
+      "points": 45,
+      "description": "The process tree has expanded beyond the configured threshold.",
+      "remedy": "Stop the agent and inspect its child-process loop",
+      "remedy_where": "the agent's process tree",
+      "atlas_id": "T1106",
+      "atlas_description": "Abnormal process execution fan-out",
+      "sensor": "process",
+      "verification": "automated"
+    },
+    {
+      "code": "SUSPICIOUS_ENDPOINT",
+      "points": 45,
+      "description": "A raw address is contacted on a port commonly used by shells or implants.",
+      "remedy": "Inspect the raw destination and stop the agent if it is unexplained",
+      "remedy_where": "the agent's live sockets",
+      "atlas_id": "T1071",
+      "atlas_description": "Suspicious command-and-control endpoint",
+      "sensor": "socket",
+      "verification": "live"
+    },
+    {
+      "code": "PRIVATE_PEER",
+      "points": 30,
+      "description": "The agent has reached another private-network host.",
+      "remedy": "Confirm the internal peer is expected and restrict lateral reach",
+      "remedy_where": "the agent's live sockets",
+      "atlas_id": "T1021",
+      "atlas_description": "Remote services / lateral movement",
+      "sensor": "socket",
+      "verification": "live"
+    },
+    {
+      "code": "METADATA_SERVICE",
+      "points": 55,
+      "description": "The agent contacted a cloud instance metadata service.",
+      "remedy": "Block instance-metadata access unless this agent explicitly requires it",
+      "remedy_where": "the agent's live sockets",
+      "atlas_id": "",
+      "atlas_description": "",
+      "sensor": "socket",
+      "verification": "automated"
+    },
+    {
+      "code": "CREDENTIAL_ACCESS",
+      "points": 70,
+      "description": "A credential was actually opened, not merely reachable.",
+      "remedy": "Rotate the credential and remove the agent's access",
+      "remedy_where": "filesystem observation",
+      "atlas_id": "T1555",
+      "atlas_description": "Credentials accessed from local stores",
+      "sensor": "filesystem_events",
+      "verification": "unavailable"
+    },
+    {
+      "code": "PERSISTENCE_WRITE",
+      "points": 70,
+      "description": "A persistence location was modified.",
+      "remedy": "Remove the persistence entry and inspect the agent",
+      "remedy_where": "filesystem observation",
+      "atlas_id": "T1543",
+      "atlas_description": "Persistence through startup configuration",
+      "sensor": "filesystem_events",
+      "verification": "unavailable"
+    },
+    {
+      "code": "SELF_TAMPERING",
+      "points": 100,
+      "description": "Topgent code or policy was modified by an agent.",
+      "remedy": "Stop the agent and verify Topgent from a trusted copy",
+      "remedy_where": "Topgent integrity",
+      "atlas_id": "T1562",
+      "atlas_description": "Impair defenses by modifying the monitor",
+      "sensor": "filesystem_events",
+      "verification": "unavailable"
+    },
+    {
+      "code": "DISALLOWED_ASSET",
+      "points": 80,
+      "description": "The agent is using an asset you explicitly disallowed.",
+      "remedy": "Stop or reconfigure the agent so it no longer uses this asset",
+      "remedy_where": "your asset policy",
+      "atlas_id": "T1204",
+      "atlas_description": "Use of a locally disallowed component",
+      "sensor": "config",
+      "verification": "automated"
+    }
+  ]
+}

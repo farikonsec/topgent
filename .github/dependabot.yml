@@ -1,0 +1,23 @@
+# Weekly dependency updates, grouped by ecosystem. Grouping produces one pull
+# request per ecosystem for minor and patch versions. Security updates are
+# ungrouped and delivered immediately.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    open-pull-requests-limit: 5
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+
+  # Actions pinned by major version do not receive major updates. Four actions
+  # were several majors behind before this entry existed.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: weekly, day: monday }
+    groups:
+      actions:
+        patterns: ["*"]

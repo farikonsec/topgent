@@ -1,0 +1,1 @@
+{"contract_version":1,"agents":[{"asset_id":"urn:topgent:agent:fixture","grade":"LOW"}],"assets":[{"id":"urn:topgent:tool:fixture","kind":"tool","disposition":"approved"}],"coverage":[{"rule":"FIXTURE","state":"available"}]}
