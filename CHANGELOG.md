@@ -4,9 +4,21 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-01
+
 ### Added
 
 - **Linux desktop application.** The interface now draws on Linux and ships as a `.tar.gz` alongside the macOS and Windows builds. Verified on Linux ARM64 on 2026-09-01: built native, window drawn, six catalogued agents detected, state directory written. Where no Vulkan or GL driver is present the toolkit falls back to software rendering and the interface is unaffected.
+
+- **`topgent --version`.** The command-line tool reported the version in every document it wrote and had no way to be asked directly.
+
+### Fixed
+
+- **An unreadable colour crashed the interface.** The palette loader checked a colour was six bytes and then split it every two, so six bytes of multi-byte text halved a character and panicked. The settings file is one anyone can edit.
+- **A permission rule naming no path became a grant.** `Bash()` parsed to the tool `Bash` and an empty argument, and was recorded as a grant over `""`. It is now refused; a bare `Bash` still means every path.
+- **No application icon on any platform.** Nothing embedded a Windows resource, the macOS bundle named no `CFBundleIconFile`, and no window icon was set.
+- **Empty notification bodies on Windows.** The toast indexed a WinRT node list with `[1]`, which PowerShell cannot do, so every notification shipped a title and nothing else.
+- **The declared minimum Rust was wrong.** Five places promised 1.88 while `sysinfo` requires 1.95.
 
 ### Changed
 
@@ -58,5 +70,6 @@ The Linux desktop build is withheld. Tauri renders its Linux window through GTK3
 
 Documented in `THREAT-MODEL.md` and the Limits section of `README.md`. No pre-execution blocking on macOS or Windows, no per-extension attribution within a shared editor process, and no telemetry the platform does not supply.
 
-[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/farikonsec/topgent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/farikonsec/topgent/releases/tag/v0.1.0

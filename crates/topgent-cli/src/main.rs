@@ -29,6 +29,8 @@ topgent - AI agent security monitor
   topgent export cyclonedx [--format json|html] [--output PATH]
   topgent policy check [--input REPORT] [--threshold LEVEL] [--require-coverage]
 
+  topgent --version        which build this is
+
 Full command reference: https://github.com/farikonsec/topgent
 ";
 
@@ -39,6 +41,13 @@ fn main() {
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{USAGE}");
+        return;
+    }
+
+    // The version a report carries is the one the binary was built from, and a
+    // person holding an unmarked download needs a way to ask which that is.
+    if args.iter().any(|a| a == "--version" || a == "-V") {
+        println!("topgent {}", env!("CARGO_PKG_VERSION"));
         return;
     }
 

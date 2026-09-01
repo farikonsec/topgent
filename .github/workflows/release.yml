@@ -12,8 +12,29 @@ permissions:
   contents: write
 
 jobs:
+  # Every artefact below is named from the tag, while the binary inside reports
+  # the manifest version. Nothing made them agree, so `git tag v9.9.9` would
+  # ship an archive called 9.9.9 holding a tool that answers 0.1.0. One grep is
+  # cheaper than a release nobody can identify afterwards.
+  version:
+    name: Tag matches the manifest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Compare
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(grep -m1 '^version = ' Cargo.toml | cut -d'"' -f2)
+          echo "tag=$tag manifest=$manifest"
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml $manifest"
+            exit 1
+          fi
+
   build:
     name: ${{ matrix.target }}
+    needs: version
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -78,6 +99,7 @@ jobs:
   macos-app:
     name: Desktop application (${{ matrix.arch }})
     runs-on: macos-latest
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -153,6 +175,7 @@ jobs:
   windows-app:
     name: Desktop application (Windows ${{ matrix.arch }})
     runs-on: windows-latest
+    needs: version
     strategy:
       fail-fast: false
       matrix:
@@ -188,6 +211,7 @@ jobs:
   linux-app:
     name: Desktop application (Linux ${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
+    needs: version
     strategy:
       fail-fast: false
       matrix:
