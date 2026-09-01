@@ -118,7 +118,7 @@ impl SystemTool {
 /// The desktop app therefore flashed a black window several times per sweep,
 /// which looks like the tool doing something it will not explain.
 ///
-/// `CREATE_NO_WINDOW` is 0x0800_0000. The constant is written here rather than
+/// `CREATE_NO_WINDOW` is `0x0800_0000`. The constant is written here rather than
 /// pulled from a Windows crate because it is one number and this is the only
 /// place that needs it.
 #[cfg(windows)]
