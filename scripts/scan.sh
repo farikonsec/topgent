@@ -15,7 +15,17 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 REPORT_ONLY=0
-[ "${1:-}" = "--report" ] && REPORT_ONLY=1
+ONLY=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --report) REPORT_ONLY=1 ;;
+    # CI runs one tool per job so each gets its own pass or fail, but the
+    # invocation stays here so the runner and the desk cannot drift apart.
+    --only) ONLY="${2:-}"; shift ;;
+    *) ;;
+  esac
+  shift
+done
 FAILED=()
 MISSING=()
 
@@ -24,6 +34,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 run() {
   local name=$1 tool=$2
   shift 2
+  [ -n "$ONLY" ] && [ "$ONLY" != "$tool" ] && return
   if ! have "$tool"; then
     MISSING+=("$name ($tool)")
     printf '\n──── %s: SKIPPED, %s is not installed\n' "$name" "$tool"
