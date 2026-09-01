@@ -261,7 +261,9 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Security
 
-Report vulnerabilities through the **Security** tab or to **farhad@hadosec.com**. See [`SECURITY.md`](SECURITY.md).
+Report vulnerabilities through the **Security** tab, using **Report a vulnerability**. Reports are visible only to maintainers. See [`SECURITY.md`](SECURITY.md).
+
+For anything that is not a vulnerability, open an [issue](https://github.com/farikonsec/topgent/issues).
 
 ## Licence
 
