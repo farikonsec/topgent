@@ -104,6 +104,46 @@ mod tests {
         Ok(())
     }
 
+    /// The second finding in the same lock, surfaced by a Windows CI runner.
+    ///
+    /// A writer killed mid-record leaves the lock file behind. Staleness was
+    /// borrowed from the sweep lock at thirty seconds, while the wait budget
+    /// was a two-hundred-attempt retry loop that ran out after about one. So
+    /// every other writer gave up twenty-nine seconds before the lock became
+    /// reclaimable, and reported that somebody held it when nobody did.
+    ///
+    /// The wait is now wall-clock and longer than the staleness window, so a
+    /// waiter is still waiting when the abandoned lock can be taken.
+    #[test]
+    fn a_lock_left_by_a_dead_writer_is_reclaimed_rather_than_waited_out() {
+        let dir = test_dir("response-transition-stale-lock");
+        let journal = Journal::at(&dir);
+        std::fs::create_dir_all(&dir).expect("the state directory is creatable");
+
+        // What a writer killed between `create_new` and its rename leaves.
+        let lock = dir.join("response-transitions.lock");
+        std::fs::write(&lock, b"").expect("the lock file is writable");
+
+        let started = std::time::Instant::now();
+        journal
+            .record_response_transition("response:stale:1000:0:alert:100:write:/tmp/x", true, 1_000)
+            .expect("a lock nobody holds must not block a writer");
+        let waited = started.elapsed();
+
+        assert!(
+            waited < std::time::Duration::from_secs(5),
+            "waited {waited:?}, which means the budget ran out before the reclaim"
+        );
+        assert_eq!(
+            journal
+                .response_transitions()
+                .expect("the journal is readable")
+                .len(),
+            1
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The finding: every journal writer named its scratch file
     /// `<record>.<pid>.tmp`, so two writers inside one process collided on it.
     /// Both created it, one renamed it away, and the other's rename failed with

@@ -94,6 +94,23 @@ struct RecordLock {
     path: PathBuf,
 }
 
+/// How long a record lock may sit untouched before it is treated as abandoned.
+///
+/// Deliberately not [`crate::SWEEP_LOCK_STALE_MS`]. A sweep is long, so thirty
+/// seconds is a reasonable guess at "that process is gone". A record write is a
+/// read, a serialise, and an atomic replace: milliseconds. Borrowing the sweep
+/// figure meant a writer killed mid-record silenced every other writer for
+/// thirty seconds, and they gave up inside the first two.
+const RECORD_LOCK_STALE_MS: u64 = 2_000;
+
+/// How long a writer waits for the lock before reporting that it could not get in.
+///
+/// Longer than [`RECORD_LOCK_STALE_MS`] on purpose. A waiter blocked by a dead
+/// holder must still be waiting when the lock becomes reclaimable, or it gives
+/// up on a lock nobody holds. Under live contention this is the drain time, and
+/// bounded because a hang in a monitor is an outage.
+const RECORD_LOCK_WAIT_MS: u64 = 5_000;
+
 impl RecordLock {
     fn acquire(path: &Path) -> Option<Self> {
         match OpenOptions::new().create_new(true).write(true).open(path) {
@@ -105,7 +122,7 @@ impl RecordLock {
                     .and_then(|metadata| metadata.modified())
                     .ok()
                     .and_then(|modified| modified.elapsed().ok())
-                    .is_some_and(|age| age.as_millis() >= u128::from(crate::SWEEP_LOCK_STALE_MS));
+                    .is_some_and(|age| age.as_millis() >= u128::from(RECORD_LOCK_STALE_MS));
                 if abandoned {
                     let _ = std::fs::remove_file(path);
                 }
@@ -120,6 +137,26 @@ impl Drop for RecordLock {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.path);
     }
+}
+
+/// How long to sleep before trying the lock again.
+///
+/// The jitter is the point, not the backoff. Without it every contender sleeps
+/// the same interval, wakes together, and races again: eight writers convoy,
+/// and the unlucky one can lose every race until its budget runs out. That is
+/// what failed on the Windows runner, where each critical section is slow
+/// enough for the convoy to persist. Spreading the wake-ups breaks it.
+///
+/// The jitter source is the clock rather than a random number generator, so
+/// this stays a dependency-free crate.
+fn backoff(attempt: u32) -> std::time::Duration {
+    let base = u64::from(attempt.min(8)).saturating_add(1);
+    let jitter = u64::from(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |since| since.subsec_nanos()),
+    ) % base.saturating_mul(2).max(1);
+    std::time::Duration::from_millis(base.saturating_add(jitter))
 }
 
 impl Journal {
@@ -355,20 +392,24 @@ impl Journal {
     ) -> std::io::Result<T> {
         create_dir_all(&self.dir)?;
         let path = self.dir.join(format!("{name}.lock"));
-        // Bounded, because waiting forever on a lock is a hang and a hang in a
-        // monitor is an outage. A writer that cannot get in within the window
-        // says so rather than proceeding and losing somebody's record.
-        for attempt in 0..200_u32 {
+        // Bounded by wall clock rather than by a retry count. An attempt count
+        // is a wait whose length depends on how fast the machine is, which is
+        // how this passed everywhere and failed on the slowest Windows runner.
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(RECORD_LOCK_WAIT_MS);
+        let mut attempt = 0_u32;
+        while std::time::Instant::now() < deadline {
             if let Some(_lock) = RecordLock::acquire(&path) {
                 return work();
             }
-            std::thread::sleep(std::time::Duration::from_millis(
-                u64::from(attempt.min(5)) + 1,
-            ));
+            std::thread::sleep(backoff(attempt));
+            attempt = attempt.saturating_add(1);
         }
         Err(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
-            format!("another writer held the {name} journal lock throughout"),
+            format!(
+                "another writer held the {name} journal lock for {RECORD_LOCK_WAIT_MS}ms"
+            ),
         ))
     }
 
