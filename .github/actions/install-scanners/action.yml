@@ -15,9 +15,18 @@ runs:
       run: |
         set -euo pipefail
         cd "$(mktemp -d)"
-        curl -sSfL "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz" | tar -xz trufflehog
-        curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" | tar -xz gitleaks
-        curl -sSfL -o osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
+        # Retried. A release download reset by the far end failed the whole
+        # step, semgrep never installed, and the job died on "command not
+        # found" three steps later. The scanners are pinned, so a retry gets
+        # the same bytes or none.
+        get() {
+          curl -sSfL --retry 5 --retry-delay 3 --retry-all-errors "$@"
+        }
+        get "https://github.com/trufflesecurity/trufflehog/releases/download/v${TRUFFLEHOG_VERSION}/trufflehog_${TRUFFLEHOG_VERSION}_linux_amd64.tar.gz" -o th.tar.gz
+        tar -xzf th.tar.gz trufflehog
+        get "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o gl.tar.gz
+        tar -xzf gl.tar.gz gitleaks
+        get -o osv-scanner "https://github.com/google/osv-scanner/releases/download/v${OSV_VERSION}/osv-scanner_linux_amd64"
         chmod +x trufflehog gitleaks osv-scanner
         sudo mv trufflehog gitleaks osv-scanner /usr/local/bin/
         pipx install semgrep

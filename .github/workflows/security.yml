@@ -32,7 +32,7 @@ jobs:
         with:
           fetch-depth: 0
       - uses: ./.github/actions/install-scanners
-      - run: ./scripts/scan.sh --only trufflehog
+      - run: ./scripts/scan.sh --require-all --only trufflehog
 
   secrets-gitleaks:
     name: Secrets, including history (gitleaks)
@@ -42,7 +42,7 @@ jobs:
         with:
           fetch-depth: 0 # gitleaks reads history, not just the tip
       - uses: ./.github/actions/install-scanners
-      - run: ./scripts/scan.sh --only gitleaks
+      - run: ./scripts/scan.sh --require-all --only gitleaks
       - name: SARIF
         if: always()
         run: gitleaks detect --no-banner --redact --report-format sarif --report-path gitleaks.sarif --exit-code 0
@@ -58,7 +58,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/install-scanners
-      - run: ./scripts/scan.sh --only osv-scanner
+      - run: ./scripts/scan.sh --require-all --only osv-scanner
       - name: SARIF
         if: always()
         run: osv-scanner scan source --config=osv-scanner.toml --format sarif --output osv.sarif . || true
@@ -74,7 +74,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/install-scanners
-      - run: ./scripts/scan.sh --only semgrep
+      - run: ./scripts/scan.sh --require-all --only semgrep
       - name: SARIF
         if: always()
         run: semgrep --config=p/rust --config=p/security-audit --config=p/secrets --sarif --output semgrep.sarif || true

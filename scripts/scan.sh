@@ -15,10 +15,15 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.."
 REPORT_ONLY=0
+REQUIRE_ALL=0
 ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --report) REPORT_ONLY=1 ;;
+    # A scanner that is not installed is a scanner that found nothing, and on a
+    # runner that reads as a pass. CI requires every tool it installed to be
+    # present; a desk without all four still gets a useful partial run.
+    --require-all) REQUIRE_ALL=1 ;;
     # CI runs one tool per job so each gets its own pass or fail, but the
     # invocation stays here so the runner and the desk cannot drift apart.
     --only) ONLY="${2:-}"; shift ;;
@@ -76,6 +81,10 @@ run "semgrep (static analysis)" semgrep \
 printf '\n════ summary\n'
 if [ ${#MISSING[@]} -gt 0 ]; then
   printf '  not installed: %s\n' "${MISSING[*]}"
+  if [ "$REQUIRE_ALL" = 1 ] && [ "$REPORT_ONLY" != 1 ]; then
+    printf '  refusing to report clean with a scanner missing\n'
+    exit 1
+  fi
 fi
 if [ ${#FAILED[@]} -eq 0 ]; then
   printf '  all scanners clean\n'
