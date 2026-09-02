@@ -41,8 +41,9 @@ fuzz_target!(|data: &[u8]| {
         // A policy is an object. Serde will otherwise fill a struct from a
         // JSON array positionally, and `[[0]]` produced a policy whose every
         // weight was zero, scoring every agent on the host at zero.
+        let normalized = text.strip_prefix('\u{feff}').unwrap_or(text);
         assert!(
-            serde_json::from_slice::<serde_json::Value>(data)
+            serde_json::from_str::<serde_json::Value>(normalized)
                 .is_ok_and(|value| value.is_object()),
             "a policy was parsed out of something that is not an object"
         );

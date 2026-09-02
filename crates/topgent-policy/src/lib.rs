@@ -627,6 +627,7 @@ fn restrict(file: &std::fs::File) -> std::io::Result<()> {
 }
 
 #[cfg(not(unix))]
+#[allow(clippy::unnecessary_wraps)] // Keep the same fallible interface on every platform.
 fn restrict(_file: &std::fs::File) -> std::io::Result<()> {
     Ok(())
 }
