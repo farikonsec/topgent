@@ -395,8 +395,8 @@ impl Journal {
         // Bounded by wall clock rather than by a retry count. An attempt count
         // is a wait whose length depends on how fast the machine is, which is
         // how this passed everywhere and failed on the slowest Windows runner.
-        let deadline = std::time::Instant::now()
-            + std::time::Duration::from_millis(RECORD_LOCK_WAIT_MS);
+        let deadline =
+            std::time::Instant::now() + std::time::Duration::from_millis(RECORD_LOCK_WAIT_MS);
         let mut attempt = 0_u32;
         while std::time::Instant::now() < deadline {
             if let Some(_lock) = RecordLock::acquire(&path) {
@@ -407,9 +407,7 @@ impl Journal {
         }
         Err(std::io::Error::new(
             std::io::ErrorKind::WouldBlock,
-            format!(
-                "another writer held the {name} journal lock for {RECORD_LOCK_WAIT_MS}ms"
-            ),
+            format!("another writer held the {name} journal lock for {RECORD_LOCK_WAIT_MS}ms"),
         ))
     }
 
