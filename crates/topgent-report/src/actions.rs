@@ -307,9 +307,14 @@ pub fn add_rule(path: &str, condition: &str, severity: &str) -> Value {
     } else {
         Severity::Points(severity.parse().unwrap_or(20))
     };
+    // Stored the way the graph keys a resource, not the way it was typed. A
+    // rule reading /home/you/.ssh/id_rsa was accepted, reported ok, and then
+    // matched nothing, because the resource it meant is keyed ~/.ssh/id_rsa.
+    // A rule that silently never fires is worse than one that is refused.
+    let path = topgent_core::resource_key(path.trim(), std::env::var("HOME").ok().as_deref());
     let mut policy = Policy::load();
     policy.add_rule(Rule {
-        path: path.trim().to_owned(),
+        path,
         condition,
         severity,
         response: ResponseMode::Alert,

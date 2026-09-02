@@ -71,7 +71,84 @@ pub fn parse_permission_rule(rule: &str) -> Option<(String, Access)> {
     Some((arg.to_owned(), access))
 }
 
-fn claude_facts(subject: &Subject, clock: &dyn Clock, home: &Path, facts: &mut Vec<Fact>) {
+/// The agent family an execute grant lets this one run, if any.
+///
+/// `Bash(gemini *)` is a declaration that this agent may start Gemini, and
+/// Gemini's reach becomes its reach at the second hop. Only the command itself
+/// is read: the first token of the grant, matched against the same catalogue
+/// that names a running process, so a grant over `gemini-notes` is not a grant
+/// over Gemini.
+///
+/// Data only. Nothing here runs anything.
+#[must_use]
+pub fn invoked_agent_family(rule: &str) -> Option<&'static str> {
+    let (argument, access) = parse_permission_rule(rule)?;
+    if access != Access::Execute {
+        return None;
+    }
+    let command = argument.split_whitespace().next()?;
+    let name = command.rsplit(['/', '\\']).next().unwrap_or(command);
+    if name.is_empty() || name == "*" {
+        return None;
+    }
+    Some(
+        crate::signatures::recognise_declared_command(name)?
+            .id
+            .as_str(),
+    )
+}
+
+/// The second hop, where an agent's own configuration grants running another.
+///
+/// Emitted per running target, because the claim names a pid and a pid that is
+/// not running is not evidence of anything. `AGENT_CHAIN` scored on this and
+/// nothing produced it, so `invokes` was always empty on a real host.
+fn chain_facts(
+    subject: &Subject,
+    clock: &dyn Clock,
+    probe: &str,
+    rule: &str,
+    running: &BTreeMap<&'static str, Vec<(u32, UnixMillis)>>,
+    facts: &mut Vec<Fact>,
+) {
+    let Some(family) = invoked_agent_family(rule) else {
+        return;
+    };
+    let Some(targets) = running.get(family) else {
+        return;
+    };
+    let own_pid = match *subject {
+        Subject::Process { pid, .. } => Some(pid),
+        _ => None,
+    };
+    for (target_pid, _) in targets {
+        // An agent invoking itself is not a second hop.
+        if own_pid == Some(*target_pid) {
+            continue;
+        }
+        facts.extend(emit(
+            ID,
+            probe,
+            // Declared, not observed. The config says it may run that agent;
+            // nothing here saw it do so.
+            Confidence::Likely,
+            clock,
+            subject.clone(),
+            Claim::InvokesAgent {
+                target_pid: *target_pid,
+                via: rule.to_owned(),
+            },
+        ));
+    }
+}
+
+fn claude_facts(
+    subject: &Subject,
+    clock: &dyn Clock,
+    home: &Path,
+    running: &BTreeMap<&'static str, Vec<(u32, UnixMillis)>>,
+    facts: &mut Vec<Fact>,
+) {
     let settings = home.join(".claude/settings.json");
     let probe = format!("{}", settings.display());
     if let Some(v) = read_json(&settings) {
@@ -83,6 +160,9 @@ fn claude_facts(subject: &Subject, clock: &dyn Clock, home: &Path, facts: &mut V
                 continue;
             };
             for rule in rules.iter().filter_map(Value::as_str) {
+                if granted {
+                    chain_facts(subject, clock, &probe, rule, running, facts);
+                }
                 if let Some((path, access)) = parse_permission_rule(rule) {
                     facts.extend(emit(
                         ID,
@@ -258,7 +338,7 @@ impl Collector for ConfigCollector {
                     started_at: *started_at,
                 };
                 match *family {
-                    "claude-code" => claude_facts(&subject, clock, &home, &mut facts),
+                    "claude-code" => claude_facts(&subject, clock, &home, &by_family, &mut facts),
                     "codex-cli" => codex_facts(&subject, clock, &home, &mut facts),
                     _ => {}
                 }
@@ -304,5 +384,48 @@ mod permission_rules {
             Some(("/tmp/**".to_owned(), Access::Write))
         );
         assert!(parse_permission_rule("Unknown(x)").is_none());
+    }
+}
+
+#[cfg(test)]
+mod invoked_agents {
+    use super::invoked_agent_family;
+
+    /// `AGENT_CHAIN` scored a factor nothing produced: `Claim::InvokesAgent` was
+    /// in the vocabulary, the fold and the fixtures, and no collector emitted
+    /// one, so `invokes` was always empty on a real host. Found by testing the
+    /// factor on a Linux lab host and getting `invokes: []` from a config that
+    /// plainly granted it.
+    #[test]
+    fn an_execute_grant_naming_an_agent_is_a_second_hop() {
+        for (rule, family) in [
+            ("Bash(gemini *)", "gemini-cli"),
+            ("Bash(claude --print)", "claude-code"),
+            ("Execute(/usr/local/bin/goose run)", "goose"),
+        ] {
+            assert_eq!(
+                invoked_agent_family(rule),
+                Some(family),
+                "{rule} grants running {family}"
+            );
+        }
+    }
+
+    /// The command is matched whole, against the same catalogue that names a
+    /// running process. A grant over something merely starting with an agent's
+    /// name is not a grant over that agent.
+    #[test]
+    fn a_similar_command_is_not_an_agent() {
+        for rule in [
+            "Bash(gemini-notes *)",
+            "Bash(claudette)",
+            "Bash(*)",
+            "Bash(ls -la)",
+            "Write(/etc/passwd)",
+            "Read(~/.aws/credentials)",
+            "Bash()",
+        ] {
+            assert_eq!(invoked_agent_family(rule), None, "{rule} is not an agent");
+        }
     }
 }

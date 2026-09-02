@@ -707,3 +707,33 @@ fn paths_outside_home_are_keyed_as_written() {
     assert_eq!(hits.len(), 1);
     assert_eq!(hits[0].observed, Tri::Yes);
 }
+
+/// The key a rule has to be written in, so a watchlist entry and the resource
+/// it means agree. A rule typed as an absolute home path was accepted and then
+/// matched nothing, because the graph keys that resource by its tilde form.
+#[test]
+fn a_home_path_keys_the_same_however_it_is_written() {
+    let home = Some("/home/testuser");
+    for written in ["/home/testuser/.ssh/id_rsa", "~/.ssh/id_rsa"] {
+        assert_eq!(
+            topgent_core::resource_key(written, home),
+            "~/.ssh/id_rsa",
+            "{written} must key the same as every other name for it"
+        );
+    }
+    // Outside home, and with no home known, a path is left exactly as written.
+    assert_eq!(
+        topgent_core::resource_key("/etc/shadow", home),
+        "/etc/shadow"
+    );
+    assert_eq!(
+        topgent_core::resource_key("/home/testuser/x", None),
+        "/home/testuser/x"
+    );
+    // A sibling directory that merely starts with the same characters is not
+    // inside home.
+    assert_eq!(
+        topgent_core::resource_key("/home/testuser2/x", home),
+        "/home/testuser2/x"
+    );
+}

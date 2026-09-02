@@ -158,6 +158,25 @@ pub fn recognise_extension(extension_id: &str) -> Option<&'static FamilySignatur
     })
 }
 
+/// The family a *declared command* names, matched on the command alone.
+///
+/// Process recognition also requires the install path, because a file can be
+/// renamed. A declaration has no path to check: `Bash(gemini *)` in an agent's
+/// own configuration is a statement about a command it may run, and the only
+/// thing to match is the command. Facts built from this carry `Likely`, not
+/// `Certain`, because a declaration is not an observation.
+#[must_use]
+pub fn recognise_declared_command(command: &str) -> Option<&'static FamilySignature> {
+    let lower = command.to_ascii_lowercase().replace('\\', "/");
+    let basename = lower.rsplit('/').next().unwrap_or(&lower);
+    builtin().ok()?.families.iter().find(|family| {
+        family
+            .executables
+            .iter()
+            .any(|signature| signature.matches(basename))
+    })
+}
+
 fn recognise_in<'a>(catalogue: &'a Catalogue, executable: &str) -> Option<&'a FamilySignature> {
     let lower = executable.to_ascii_lowercase().replace('\\', "/");
     let basename = lower.rsplit('/').next().unwrap_or(&lower);

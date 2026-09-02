@@ -4,6 +4,13 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+### Fixed
+
+- **A credential that was opened still read "never touched".** Reachability names a file `~/.aws/credentials` and the filesystem sensor names it `/home/you/.aws/credentials`. The fold keyed resources by the string it was given, so one file became two and `CREDENTIAL_ACCESS` could not fire for anything under a home directory.
+- **Nothing protected the init process off Windows.** `topgent stop 1` offered to terminate systemd or launchd behind an ordinary confirmation. Pid 1 is now refused everywhere, along with `systemd`, `init`, `launchd`, `kthreadd` and `kernel_task` by name.
+- **A watchlist rule written as an absolute home path never matched.** It was accepted, reported `ok`, and silently scored nothing. Rules now normalise to the same key the graph uses.
+- **`AGENT_CHAIN` could not fire.** It scored on `invokes`, which only `Claim::InvokesAgent` fills, and no collector emitted one. The config collector now reads an execute grant naming another agent as a second hop.
+
 ## [0.2.1] - 2026-09-01
 
 ### Fixed

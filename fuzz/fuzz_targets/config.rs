@@ -15,6 +15,17 @@ fuzz_target!(|data: &[u8]| {
         assert!(!path.is_empty(), "an empty path was accepted as a rule");
     }
 
+    // The same rule read as a grant to run another agent. A second hop is
+    // scored at 12 points, so a rule that names no agent must never produce a
+    // family, and one that does must name a family the catalogue knows.
+    if let Some(family) = topgent_collect::config::invoked_agent_family(text) {
+        assert!(!family.is_empty(), "an empty family was returned as a hop");
+        let known = topgent_collect::signatures::builtin()
+            .map(|c| c.families.iter().any(|f| f.id == family))
+            .unwrap_or(false);
+        assert!(known, "a family outside the catalogue was returned: {family}");
+    }
+
     // The open-file listing, which names paths a process chose.
     let _ = topgent_collect::editor::parse_lsof_fields(text);
 

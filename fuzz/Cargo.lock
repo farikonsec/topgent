@@ -3900,7 +3900,7 @@ checksum = "7d56353a2a665ad0f41a421187180aab746c8c325620617ad883a99a1cbe66d2"
 
 [[package]]
 name = "topgent-collect"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3911,7 +3911,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-core"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "topgent-facts",
  "topgent-policy",
@@ -3919,7 +3919,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-enforce"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "nix",
  "topgent-collect",
@@ -3929,7 +3929,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-export"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3939,7 +3939,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-facts"
-version = "0.1.0"
+version = "0.2.1"
 
 [[package]]
 name = "topgent-fuzz"
@@ -3956,7 +3956,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-journal"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
  "topgent-core",
@@ -3965,7 +3965,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-policy"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde",
  "serde_json",
@@ -3973,7 +3973,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-report"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "serde_json",
  "topgent-collect",
@@ -3987,7 +3987,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-ui"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "flate2",
  "iced",

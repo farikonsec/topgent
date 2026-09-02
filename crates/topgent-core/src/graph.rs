@@ -447,7 +447,8 @@ impl ResourceBuilder {
 ///
 /// The tilde form wins. It is the one already shown, and it keeps the account
 /// name out of a report.
-fn resource_key(path: &str, home: Option<&str>) -> String {
+#[must_use]
+pub fn resource_key(path: &str, home: Option<&str>) -> String {
     if path.starts_with("~/") {
         return path.to_owned();
     }
