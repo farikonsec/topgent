@@ -63,6 +63,19 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
+      # Carried between runs. Without it every run starts cold, and a
+      # time-boxed fuzzer that found a crash once will not find it again: the
+      # session_export bug was found on one push and missed on the next, with
+      # nothing changed. Restored by prefix so a run always inherits the most
+      # recent corpus for its target and saves a fresh key.
+      - name: Restore the corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus/${{ matrix.target }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.target }}-
+
       # Five minutes on a push, an hour on the schedule. A crash is a failure,
       # and the input that caused it is kept so it can be reproduced exactly.
       # Inputs that found a bug once, so a run always tries them first.
@@ -83,6 +96,15 @@ jobs:
           if [ "${{ github.event_name }}" = "schedule" ]; then seconds=3600; fi
           cargo fuzz run "${{ matrix.target }}" -- \
             -max_total_time="$seconds" -rss_limit_mb=4096
+
+      # Collapsed to the smallest set with the same coverage before it is
+      # cached. A corpus carried between runs otherwise grows without bound,
+      # and a fuzzer spends its five minutes re-running inputs that teach it
+      # nothing. Only on success: after a crash the corpus is evidence.
+      - name: Minimise the corpus
+        if: success()
+        working-directory: fuzz
+        run: cargo fuzz cmin "${{ matrix.target }}" || true
 
       - name: Keep what crashed it
         if: failure()
