@@ -4,6 +4,8 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-09-02
+
 ### Fixed
 
 - **A credential that was opened still read "never touched".** Reachability names a file `~/.aws/credentials` and the filesystem sensor names it `/home/you/.aws/credentials`. The fold keyed resources by the string it was given, so one file became two and `CREDENTIAL_ACCESS` could not fire for anything under a home directory.
@@ -83,7 +85,8 @@ The Linux desktop build is withheld. Tauri renders its Linux window through GTK3
 
 Documented in `THREAT-MODEL.md` and the Limits section of `README.md`. No pre-execution blocking on macOS or Windows, no per-extension attribution within a shared editor process, and no telemetry the platform does not supply.
 
-[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/farikonsec/topgent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/farikonsec/topgent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/farikonsec/topgent/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/farikonsec/topgent/releases/tag/v0.1.0
