@@ -8,7 +8,7 @@
 
 use topgent_facts::{
     Access, Claim, Confidence, ConnectionOutcome, Direction, DnsOutcome, Fact, Provenance,
-    SCHEMA_VERSION, Subject, UnixMillis,
+    Reachability, SCHEMA_VERSION, Subject, UnixMillis,
 };
 
 /// A timestamp, in the arbitrary units the tests agree on.
@@ -34,8 +34,24 @@ pub fn endpoint_subject(host: &str, port: u16) -> Subject {
     }
 }
 
-/// One fact with default provenance.
+/// The `ProcessSeen` an editor extension host arrives with.
+///
+/// The editor collector emits this alongside every `EditorExtensionActive`, and
+/// the fold anchors on both, so a fixture that models a shared host needs it
+/// too.
 #[must_use]
+pub fn host_process(subject: Subject) -> Fact {
+    fact(
+        subject,
+        Claim::ProcessSeen {
+            exe: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron".to_owned(),
+            exe_path_known: true,
+            uid: 501,
+            user: "testuser".to_owned(),
+        },
+    )
+}
+
 pub fn fact(subject: Subject, claim: Claim) -> Fact {
     Fact::new(
         SCHEMA_VERSION,
@@ -59,6 +75,9 @@ pub struct Stream {
     probe: String,
     clock: u64,
     facts: Vec<Fact>,
+    /// Whether `build` should supply a placeholder family so the fold anchors
+    /// this identity. Set by `seen`, which models a process that is an agent.
+    anchor: bool,
 }
 
 impl Stream {
@@ -78,6 +97,7 @@ impl Stream {
             probe: "fixture".to_owned(),
             clock: 2_000,
             facts: Vec::new(),
+            anchor: false,
         }
     }
 
@@ -110,8 +130,21 @@ impl Stream {
     }
 
     /// The process exists.
+    ///
+    /// The fold anchors an identity on a `ProcessSeen` **plus** something that
+    /// says what it is, so [`Self::build`] supplies a placeholder family for a
+    /// stream that names none. Use [`Self::seen_unrecognised`] to model the
+    /// case the anchoring rule exists for: a process nothing recognised.
     #[must_use]
     pub fn seen(self, exe: &str, uid: u32, user: &str) -> Self {
+        let mut next = self.seen_unrecognised(exe, uid, user);
+        next.anchor = true;
+        next
+    }
+
+    /// The process exists, and nothing established what it is.
+    #[must_use]
+    pub fn seen_unrecognised(self, exe: &str, uid: u32, user: &str) -> Self {
         self.push(Claim::ProcessSeen {
             exe_path_known: true,
             exe: exe.to_owned(),
@@ -181,13 +214,31 @@ impl Stream {
         next
     }
 
-    /// A path is in reach whether or not it was touched.
+    /// A path the kernel says this account can read, whether or not it was
+    /// touched.
     #[must_use]
     pub fn reachable(self, path: &str, access: Access, sensitive: bool) -> Self {
+        self.reachable_by(path, access, sensitive, Reachability::AccountReadable)
+    }
+
+    /// A path probed with a stated kind of evidence.
+    ///
+    /// The default above is the kernel's own answer. This one exists so a test
+    /// can assert that weaker evidence — a path that merely resolves — does not
+    /// close the reachable column.
+    #[must_use]
+    pub fn reachable_by(
+        self,
+        path: &str,
+        access: Access,
+        sensitive: bool,
+        evidence: Reachability,
+    ) -> Self {
         self.push(Claim::ResourceReachable {
             path: path.to_owned(),
             access,
             sensitive,
+            evidence,
         })
     }
 
@@ -311,6 +362,18 @@ impl Stream {
     /// The facts, in the order they were added.
     #[must_use]
     pub fn build(self) -> Vec<Fact> {
+        // Decided from what the stream contains rather than appended blindly,
+        // so a stream that names its own family keeps it and reversing the
+        // result cannot change which family won.
+        let named = self.facts.iter().any(|fact| {
+            matches!(
+                fact.claim(),
+                Claim::AgentFamily { .. } | Claim::EditorExtensionActive { .. }
+            )
+        });
+        if self.anchor && !named {
+            return self.family("fixture-agent").facts;
+        }
         self.facts
     }
 }

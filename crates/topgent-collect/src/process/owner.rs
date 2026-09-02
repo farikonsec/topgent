@@ -64,6 +64,34 @@ pub fn with_resolved_owner(mut process: ProcInfo) -> ProcInfo {
     process
 }
 
+/// Who Topgent itself runs as.
+///
+/// The reference every "is this my process" question is answered against. Read
+/// once per sweep rather than per process: on Windows it costs a shell.
+#[must_use]
+pub fn current_owner() -> Owner {
+    owner_of(std::process::id())
+}
+
+/// Those of `procs` the given account owns, with ownership resolved for each.
+///
+/// The process table is every process the user can *see*, which on a shared
+/// host includes other people's. Configuration read out of this account's
+/// `HOME` belongs only to this account's processes; attaching it to somebody
+/// else's agent invents grants that account never had.
+///
+/// Resolution costs a query per process on Windows, so callers narrow to
+/// candidates first. An owner the platform will not state matches nothing, so
+/// such a process is left out rather than assumed to be ours.
+#[must_use]
+pub fn owned_by(procs: Vec<ProcInfo>, account: &Owner) -> Vec<ProcInfo> {
+    procs
+        .into_iter()
+        .map(with_resolved_owner)
+        .filter(|process| process.owner.is_same_account_as(account))
+        .collect()
+}
+
 /// Who owns this process, asked of the operating system now.
 ///
 /// Deliberately resolved on demand rather than collected for every process on
@@ -254,6 +282,81 @@ mod tests {
         // Absurdly long input is refused before it is parsed.
         let long = format!("S-1-5-{}", "1-".repeat(200));
         assert!(!super::valid_windows_sid(&long));
+    }
+
+    /// The cross-user defect: the config collector grouped every *visible*
+    /// recognised process by family and attached configuration read from this
+    /// account's `HOME` to all of them, so another user's Claude was reported
+    /// with this user's declared permissions, model and grants.
+    #[test]
+    fn another_account_is_not_swept_up_with_this_one() {
+        use super::{Owner, owned_by};
+        use crate::process::ProcInfo;
+        use topgent_facts::UnixMillis;
+
+        let process = |pid: u32, owner: Owner| ProcInfo {
+            pid,
+            started_at: UnixMillis(1),
+            exe: "claude".to_owned(),
+            exe_path_known: true,
+            name: "claude".to_owned(),
+            uid: 0,
+            user: "someone".to_owned(),
+            parent: None,
+            family: Some("claude-code"),
+            owner,
+        };
+
+        let me = Owner::Uid(501);
+        // Resolution is a no-op for an owner already stated, so this exercises
+        // the filter without touching the operating system.
+        let kept = owned_by(
+            vec![
+                process(10, Owner::Uid(501)),
+                process(11, Owner::Uid(502)),
+                process(12, Owner::Sid("S-1-5-21-1-2-3-1001".to_owned())),
+            ],
+            &me,
+        );
+        let pids: Vec<u32> = kept.iter().map(|process| process.pid).collect();
+        assert_eq!(
+            pids,
+            vec![10],
+            "a process this account does not own survived"
+        );
+    }
+
+    /// The regression this caught on the Windows lab host: the sweep leaves the
+    /// owner `Unknown` there because establishing it costs a query per process,
+    /// and `Unknown` matches nothing. A caller that compared the *unresolved*
+    /// value against its own account therefore matched nothing at all, and the
+    /// reachable column — the one this product is built around — went silently
+    /// empty on Windows.
+    ///
+    /// `owned_by` resolves before it compares, so a process with an unstated
+    /// owner that really is ours is kept.
+    #[test]
+    fn an_unresolved_owner_is_established_before_it_is_compared() {
+        use super::{Owner, current_owner, owned_by};
+
+        let me = current_owner();
+        let mut current = crate::process::snapshot()
+            .into_iter()
+            .find(|process| process.pid == std::process::id())
+            .expect("this process is in the process table");
+        // Exactly what the sweep hands over on Windows.
+        current.owner = Owner::Unknown;
+        assert!(
+            !current.owner.is_same_account_as(&me),
+            "the unresolved value must not match, or this test proves nothing"
+        );
+
+        let kept = owned_by(vec![current], &me);
+        assert_eq!(
+            kept.len(),
+            1,
+            "the process asking was excluded from its own account"
+        );
     }
 
     #[cfg(windows)]

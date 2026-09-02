@@ -27,5 +27,5 @@ pub use collector::ProcessCollector;
 pub use launcher::{SCRIPT_RUNTIMES, is_script_runtime, parse_windows_launchers};
 #[cfg(any(windows, test))]
 pub use owner::valid_windows_sid;
-pub use owner::{Owner, owner_of, with_resolved_owner};
+pub use owner::{Owner, current_owner, owned_by, owner_of, with_resolved_owner};
 pub use table::{ProcInfo, family_of, snapshot};

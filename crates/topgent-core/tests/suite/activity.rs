@@ -207,7 +207,9 @@ fn exact_descendant_activity_is_attributed_through_its_process_event() {
         .build();
     facts.extend(
         Stream::new_at(43, UnixMillis(1_500))
-            .seen("/usr/bin/curl", 501, "testuser")
+            // A descendant, not an agent. It is anchored by the parent naming
+            // it as a child, which is the only third way into the fold.
+            .seen_unrecognised("/usr/bin/curl", 501, "testuser")
             .touched("~/.ssh/id_ed25519", Access::Read)
             .socket("203.0.113.10", 443, Direction::Outbound)
             .build(),
@@ -253,7 +255,7 @@ fn ambiguous_or_reused_descendant_identity_fails_closed() {
     );
     shared.extend(
         Stream::new_at(50, UnixMillis(1_500))
-            .seen("/usr/bin/helper", 501, "testuser")
+            .seen_unrecognised("/usr/bin/helper", 501, "testuser")
             .touched("/tmp/shared", Access::Write)
             .build(),
     );
@@ -272,12 +274,12 @@ fn ambiguous_or_reused_descendant_identity_fails_closed() {
         .build();
     reused.extend(
         Stream::new_at(51, UnixMillis(1_400))
-            .seen("/usr/bin/old-helper", 501, "testuser")
+            .seen_unrecognised("/usr/bin/old-helper", 501, "testuser")
             .build(),
     );
     reused.extend(
         Stream::new_at(51, UnixMillis(1_600))
-            .seen("/usr/bin/new-helper", 501, "testuser")
+            .seen_unrecognised("/usr/bin/new-helper", 501, "testuser")
             .socket("198.51.100.20", 443, Direction::Outbound)
             .build(),
     );

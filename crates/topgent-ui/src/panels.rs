@@ -11,7 +11,7 @@ use crate::report::{Agent, Report};
 use crate::table::{self, Tables};
 use crate::theme::{self, Region, Style, size, space};
 
-use iced::widget::{Column, column, container, row, scrollable, text};
+use iced::widget::{Column, Space, column, container, row, scrollable, text};
 use iced::{Element, Length};
 
 /// Which panel the detail area is showing.
@@ -255,8 +255,14 @@ fn access<'a>(agent: &'a Agent, t: &'a Tables, s: Style) -> Element<'a, Message>
                 },
                 table::Cell::new(r.declared.clone()),
                 table::Cell::new(r.observed.clone()),
+                // "yes" means the kernel was asked and answered. Anything
+                // else says which of the two weaker answers it is, because
+                // "unknown" alone reads as nobody having looked when in fact
+                // the path resolved and readability could not be established.
                 if r.reachable == "yes" {
                     table::Cell::tinted("yes", p.critical)
+                } else if r.reachable_evidence == "path_resolves" {
+                    table::Cell::new("path only")
                 } else {
                     table::Cell::new(r.reachable.clone())
                 },
@@ -526,7 +532,29 @@ fn health<'a>(report: &'a Report, t: &'a Tables, s: Style) -> Element<'a, Messag
         .iter()
         .filter(|c| c.state == "available")
         .count();
+
+    // Which binaries the sensors actually ran. A sensor is worth exactly what
+    // the program behind it is worth, and an accepted location is not proof of
+    // ownership: `/usr/local/bin` and `/opt/homebrew/bin` belong to the
+    // logged-in user on most developer machines.
+    let tools = report
+        .tools
+        .iter()
+        .map(|tool| {
+            table::Row::new(vec![
+                table::Cell::new(tool.name.clone()),
+                if tool.state == "system_trusted" {
+                    table::Cell::new(tool.state.clone())
+                } else {
+                    table::Cell::tinted(tool.state.clone(), p.critical)
+                },
+                table::Cell::new(tool.path.clone()),
+            ])
+        })
+        .collect();
+
     column![
+        policy_health(report, s),
         note(
             format!(
                 "{covered} of {} rules have a working sensor",
@@ -543,8 +571,67 @@ fn health<'a>(report: &'a Report, t: &'a Tables, s: Style) -> Element<'a, Messag
             "No sensors reported.",
             s,
         ),
+        note(
+            "Sensor binaries",
+            "SYSTEM_TRUSTED means owned by the operating system and not \
+             writable by the account being watched. Anything else can be \
+             replaced by what Topgent is watching.",
+            s,
+        ),
+        table::view(
+            table::Id::Tools,
+            &TOOLS,
+            tools,
+            &table::state_of(t, table::Id::Tools),
+            "No sensor binaries reported.",
+            s,
+        ),
     ]
     .into()
+}
+
+static TOOLS: [table::Column2; 3] = [
+    table::Column2::text("BINARY", 3),
+    table::Column2::text("TRUST", 3),
+    table::Column2::text("PATH", 8),
+];
+
+/// Which rules produced this report.
+///
+/// A policy that broke and fell back to built-in defaults used to look exactly
+/// like a fresh install. The distinction has to reach the person reading the
+/// findings, because every one of them was scored against different rules.
+fn policy_health(report: &Report, s: Style) -> Element<'_, Message> {
+    policy_warning(&report.policy_health).map_or_else(
+        || Space::new().into(),
+        |(title, detail)| note(title, detail, s),
+    )
+}
+
+/// The line an unhealthy policy puts on the screen, if it puts one there.
+///
+/// Separate from the drawing so the decision is testable: a widget's reported
+/// size cannot tell an empty `Space` from a rendered note.
+fn policy_warning(health: &crate::report::PolicyHealth) -> Option<(String, String)> {
+    match health.state.as_str() {
+        "malformed" => Some((
+            "Your policy is not in force".to_owned(),
+            format!(
+                "{} could not be read, so these findings were scored against built-in defaults: {}",
+                health.path, health.detail
+            ),
+        )),
+        "recovered" => Some((
+            "Policy recovered from the last-known-good copy".to_owned(),
+            format!(
+                "{} could not be read and the previous copy was loaded instead: {}",
+                health.path, health.detail
+            ),
+        )),
+        // Absent, valid, or a report from a build that predates the field.
+        // None of the three is a fault, and none of them needs a line.
+        _ => None,
+    }
 }
 
 static HEALTH: [table::Column2; 5] = [
@@ -556,7 +643,11 @@ static HEALTH: [table::Column2; 5] = [
 ];
 
 /// A heading and the sentence under it, above a table.
-fn note(title: impl Into<String>, detail: &str, s: Style) -> Element<'_, Message> {
+fn note(
+    title: impl Into<String>,
+    detail: impl Into<String>,
+    s: Style,
+) -> Element<'static, Message> {
     Column::new()
         .spacing(s.pad(space::HAIR))
         .padding(
@@ -573,7 +664,7 @@ fn note(title: impl Into<String>, detail: &str, s: Style) -> Element<'_, Message
                 .color(s.palette.text),
         )
         .push(
-            text(detail)
+            text(detail.into())
                 .size(s.type_size(size::MICRO))
                 .color(s.palette.faint),
         )
@@ -1136,6 +1227,7 @@ pub fn columns_of(id: table::Id) -> &'static [table::Column2] {
         table::Id::Events => &EVENTS,
         table::Id::Activity => &ACTIVITY,
         table::Id::Health => &HEALTH,
+        table::Id::Tools => &TOOLS,
         table::Id::Context => &CONTEXT,
     }
 }
@@ -1290,6 +1382,56 @@ mod tests {
                 !description.ends_with('.'),
                 "{panel:?}: a tooltip is a label, not prose"
             );
+        }
+    }
+
+    /// Every table the interface can resize has to have a column
+    /// specification, or a drag on it panics looking for one.
+    #[test]
+    fn every_table_knows_its_own_columns() {
+        for id in [
+            table::Id::Agents,
+            table::Id::Access,
+            table::Id::Network,
+            table::Id::Events,
+            table::Id::Activity,
+            table::Id::Health,
+            table::Id::Tools,
+            table::Id::Context,
+        ] {
+            assert!(!columns_of(id).is_empty(), "{id:?} has no columns");
+        }
+    }
+
+    /// A policy that broke and fell back to built-in defaults used to look
+    /// exactly like a fresh install. Only the two states that change what the
+    /// findings mean put a line on the screen; a valid or absent policy is not
+    /// a fault and does not get one.
+    #[test]
+    fn only_an_unhealthy_policy_says_so_on_screen() {
+        for (state, expected) in [
+            ("", false),
+            ("absent", false),
+            ("valid", false),
+            ("recovered", true),
+            ("malformed", true),
+        ] {
+            let mut report = Report::default();
+            report.policy_health.state = state.to_owned();
+            report.policy_health.path = "/tmp/policy.json".to_owned();
+            report.policy_health.detail = "truncated".to_owned();
+            // A zero-size Space is what "no line" looks like, and it is the
+            // only element with no width of its own.
+            let warning = policy_warning(&report.policy_health);
+            assert_eq!(
+                warning.is_some(),
+                expected,
+                "{state:?} drew the wrong thing"
+            );
+            if let Some((title, detail)) = warning {
+                assert!(!title.is_empty());
+                assert!(detail.contains("/tmp/policy.json"), "{detail}");
+            }
         }
     }
 

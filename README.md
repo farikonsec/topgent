@@ -41,24 +41,27 @@ Topgent distinguishes three states:
 
 </div>
 
-For example, an unread SSH key produces no event. Topgent tests whether the process could open the path. It does not open the file.
+For example, an unread SSH key produces no event. Topgent asks the kernel whether the account can read the path. It does not open the file.
+
+Reachability is an answer about the **account**. A confined process under the same owner may be unable to read a path reported readable, so every reachable resource carries its evidence: `account_readable` where the kernel answered, `path_resolves` where only the path could be established.
 
 ## Features
 
 - 🔎 **Executable-based detection.** Detection validates executable provenance. A matching process name alone is insufficient.
-- 🔑 **Separate capability states.** Declared, observed, and reachable access are reported independently.
+- 🔑 **Separate capability states.** Declared, observed, and reachable access are reported independently, each with the evidence behind it.
 - 📊 **Attributable risk factors.** Each risk point includes factor, evidence, and MITRE ATLAS technique.
 - 💥 **Blast-radius graph.** Reports resources and invocable agents reachable after process compromise.
 - 🌐 **Network history.** Stores endpoints, listeners, private-network peers, and cloud metadata access for seven days.
 - 🧬 **Process-tree analysis.** Reports children, known offensive tooling, and process fan-out.
 - 📓 **Append-only journal.** Records grade changes with process identity.
-- 🩺 **Sensor coverage.** Reports unsupported, permission-required, and degraded sensors.
+- 🩺 **Sensor coverage.** Reports unsupported, permission-required, and degraded sensors, and whether each sensor binary is system-owned or replaceable by the account being watched.
+- 📋 **Policy health.** Reports whether the rules in force are the configured ones or built-in defaults, with a digest of the file that was loaded.
 - 🛑 **Guarded termination.** Revalidates `(PID, start time)` immediately before signalling.
 - 🗺️ **Address ownership.** Every endpoint carries its country and announcing network, from a table compiled into the binary. No lookup at runtime.
 - 🔔 **Notifications.** A finding of medium or worse raises one through the platform's own notification centre, with an optional sound.
 - 💾 **Session export.** Everything one run found, as a self-contained HTML document and as JSON, with a stated redaction level.
 - 📦 **CycloneDX AI-BOM export.** Produces JSON and self-contained HTML reports.
-- ⚙️ **CI policy check.** `topgent policy check` reports unavailable detection coverage with a distinct exit code.
+- ⚙️ **CI policy check.** `topgent policy check` validates the whole rule catalogue is accounted for and reports unavailable detection coverage with a distinct exit code.
 - 🔒 **Metadata collection only.** Does not collect prompts, file contents, payloads, or decrypted TLS traffic.
 
 <div align="center">
@@ -236,6 +239,9 @@ topgent export cyclonedx --format html --output topgent-aibom.html
 - Does not distinguish individual agent extensions in a shared editor process.
 - Does not report telemetry unavailable from the platform.
 - Does not name the destination of a raw ICMP socket. macOS does not expose one to a socket listing, and on Linux it requires `sendto` in the audit rules.
+- Does not evaluate process confinement. Reachability is an account-level answer; namespaces, containers, chroots and macOS sandbox profiles are not applied.
+- Does not establish readability on Windows. There is no `AccessCheck` in this build, so a reachable path there means the path resolves.
+- Does not verify sensor binaries by signature or package provenance. Ownership and writability only.
 - Does not require root or Administrator execution.
 
 `topgent doctor` reports `unsupported`, `permission_required`, or `degraded` when a sensor cannot provide complete coverage.

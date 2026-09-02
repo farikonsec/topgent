@@ -15,10 +15,37 @@ use topgent_enforce::{
 use topgent_journal::Journal;
 use topgent_policy::{AssetPolicy, Disposition, Policy, ResponseMode, Rule};
 
+/// The policy, when it is safe to edit and write back.
+///
+/// Every action here is load, modify, save. If the file on disk is broken and
+/// there is no last-known-good copy behind it, `load` returns built-in defaults
+/// — and saving those back would overwrite the operator's rules with defaults
+/// plus whatever they just clicked, destroying the only copy of what they had
+/// written. Refusing is the answer; the report already says the policy is
+/// unhealthy, and the message names the file so it can be fixed by hand.
+fn editable_policy() -> Result<Policy, Value> {
+    let (policy, health) = Policy::load_checked(&Policy::path());
+    if health.rules_are_the_operators() {
+        return Ok(policy);
+    }
+    Err(json!({
+        "ok": false,
+        "message": format!(
+            "{} could not be read, and writing to it now would replace your rules with \
+             defaults: {}",
+            Policy::path().display(),
+            health.detail().unwrap_or("no detail recorded"),
+        ),
+    }))
+}
+
 /// Enable or disable optional semantic context collection and display.
 #[must_use]
 pub fn set_semantic_enabled(enabled: bool) -> Value {
-    let mut policy = Policy::load();
+    let mut policy = match editable_policy() {
+        Ok(policy) => policy,
+        Err(refusal) => return refusal,
+    };
     policy.semantic.enabled = enabled;
     match policy.save() {
         Ok(()) => json!({ "ok": true, "enabled": enabled }),
@@ -312,7 +339,10 @@ pub fn add_rule(path: &str, condition: &str, severity: &str) -> Value {
     // matched nothing, because the resource it meant is keyed ~/.ssh/id_rsa.
     // A rule that silently never fires is worse than one that is refused.
     let path = topgent_core::resource_key(path.trim(), std::env::var("HOME").ok().as_deref());
-    let mut policy = Policy::load();
+    let mut policy = match editable_policy() {
+        Ok(policy) => policy,
+        Err(refusal) => return refusal,
+    };
     policy.add_rule(Rule {
         path,
         condition,
@@ -328,7 +358,10 @@ pub fn add_rule(path: &str, condition: &str, severity: &str) -> Value {
 /// Remove a watchlist rule by index and persist.
 #[must_use]
 pub fn remove_rule(index: usize) -> Value {
-    let mut policy = Policy::load();
+    let mut policy = match editable_policy() {
+        Ok(policy) => policy,
+        Err(refusal) => return refusal,
+    };
     if !policy.remove_rule(index) {
         return json!({ "ok": false, "message": "rule no longer exists" });
     }
@@ -349,7 +382,10 @@ pub fn set_rule_response(index: usize, response: &str) -> Value {
         "kill" => ResponseMode::Kill,
         _ => return json!({ "ok": false, "message": "invalid response mode" }),
     };
-    let mut policy = Policy::load();
+    let mut policy = match editable_policy() {
+        Ok(policy) => policy,
+        Err(refusal) => return refusal,
+    };
     let Some(rule) = policy.watchlist.get_mut(index) else {
         return json!({ "ok": false, "message": "rule no longer exists" });
     };
@@ -384,7 +420,10 @@ pub fn set_asset_disposition(
         "disallowed" => Disposition::Disallowed,
         _ => return json!({ "ok": false, "message": "invalid asset disposition" }),
     };
-    let mut policy = Policy::load();
+    let mut policy = match editable_policy() {
+        Ok(policy) => policy,
+        Err(refusal) => return refusal,
+    };
     policy.set_asset_disposition(AssetPolicy {
         asset_id: asset_id.to_owned(),
         agent_family: agent_family.map(str::to_owned),

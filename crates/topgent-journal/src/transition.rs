@@ -57,7 +57,7 @@ pub(crate) fn response_transition_from_json(value: &Value) -> Option<ResponseTra
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used)]
+    #![allow(clippy::expect_used, clippy::panic)]
 
     use crate::journal::Journal;
     use crate::test_support::test_dir;
@@ -102,5 +102,60 @@ mod tests {
         assert!(journal.response_transitions()?.is_empty());
         let _ = std::fs::remove_dir_all(dir);
         Ok(())
+    }
+
+    /// The finding: every journal writer named its scratch file
+    /// `<record>.<pid>.tmp`, so two writers inside one process collided on it.
+    /// Both created it, one renamed it away, and the other's rename failed with
+    /// the file gone. The visible symptom was a response decision reported with
+    /// transition `unknown` and `transition_persistent: false` — the audit log
+    /// silently failing to record a state change — plus orphaned `.tmp` files.
+    ///
+    /// Surfaced on a Kali lab host, where two report tests running in parallel
+    /// each drove a real sweep against the shared default journal, and did not
+    /// reproduce on the faster development machine.
+    #[test]
+    fn concurrent_writers_in_one_process_do_not_lose_a_record() {
+        let dir = test_dir("response-transition-concurrent");
+        let journal = Journal::at(&dir);
+
+        std::thread::scope(|scope| {
+            for index in 0..8_u32 {
+                let journal = &journal;
+                scope.spawn(move || {
+                    for round in 0..4_u64 {
+                        journal
+                            .record_response_transition(
+                                &format!("response:{index}:1000:0:alert:100:write:/tmp/canary"),
+                                round % 2 == 0,
+                                1_000 + round,
+                            )
+                            .unwrap_or_else(|error| {
+                                panic!("writer {index} lost a record: {error}")
+                            });
+                    }
+                });
+            }
+        });
+
+        let records = journal
+            .response_transitions()
+            .expect("the journal is readable");
+        let keys = records
+            .iter()
+            .map(|record| record.key.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(keys.len(), 8, "a writer's key vanished: {keys:?}");
+
+        // Nothing left lying about in the state directory.
+        let orphans = std::fs::read_dir(&dir)
+            .expect("the directory exists")
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.contains(".tmp"))
+            .collect::<Vec<_>>();
+        assert!(orphans.is_empty(), "scratch files survived: {orphans:?}");
+
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

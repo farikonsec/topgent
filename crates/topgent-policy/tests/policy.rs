@@ -228,3 +228,179 @@ fn the_policy_path_lives_under_the_config_home() {
     let p = Policy::path();
     assert!(p.ends_with("topgent/policy.json"), "{}", p.display());
 }
+
+/// The finding: `load_from` was `read().ok().and_then(parse).ok()
+/// .unwrap_or_default()`, so a crash mid-write, a full disk, a concurrent
+/// writer and a typo all produced the same answer as a fresh install — the
+/// operator's watchlist rules, response modes and thresholds gone, and the next
+/// report looking fine.
+#[test]
+fn losing_the_operators_rules_is_not_the_same_answer_as_never_having_had_any() {
+    use topgent_policy::PolicyHealth;
+
+    let path = temp("health-absent");
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(Policy::backup_path(&path));
+    let (_, health) = Policy::load_checked(&path);
+    assert_eq!(health, PolicyHealth::Absent);
+    assert!(health.rules_are_the_operators());
+
+    // A file that is there and readable is identified by its bytes.
+    let mut policy = Policy::default();
+    policy.add_rule(Rule {
+        path: "/tmp/canary".to_owned(),
+        condition: Condition::Observed,
+        severity: Severity::Critical,
+        response: ResponseMode::Alert,
+    });
+    policy.save_to(&path).unwrap();
+    let (loaded, health) = Policy::load_checked(&path);
+    assert_eq!(loaded.watchlist.len(), 1);
+    assert_eq!(health.as_str(), "valid");
+    assert_eq!(health.digest().map(str::len), Some(64));
+
+    // Truncated mid-write, with the last-known-good copy save_to left behind.
+    std::fs::write(&path, r#"{"watchlist": [{"path": "/tmp/can"#).unwrap();
+    let (recovered, health) = Policy::load_checked(&path);
+    assert_eq!(health.as_str(), "recovered");
+    assert!(
+        health
+            .detail()
+            .is_some_and(|d| d.contains("not valid JSON"))
+    );
+    assert_eq!(
+        recovered.watchlist.len(),
+        1,
+        "the operator's rule was lost when a good copy existed"
+    );
+    assert!(health.rules_are_the_operators());
+
+    // Same truncation with no copy behind it: defaults, and it says so.
+    std::fs::remove_file(Policy::backup_path(&path)).unwrap();
+    let (defaults, health) = Policy::load_checked(&path);
+    assert_eq!(health.as_str(), "malformed");
+    assert!(defaults.watchlist.is_empty());
+    assert!(
+        !health.rules_are_the_operators(),
+        "a broken policy with nothing behind it must not read as fine"
+    );
+
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// `fs::write` truncates first and writes second, so a reader between the two
+/// sees an empty file. The replace is atomic instead, which is a different
+/// guarantee on each platform and so is asserted on all of them.
+#[test]
+fn saving_over_an_existing_policy_replaces_it_in_one_step() {
+    let path = temp("atomic-replace");
+    let mut first = Policy::default();
+    first.add_rule(Rule {
+        path: "/tmp/first".to_owned(),
+        condition: Condition::Reachable,
+        severity: Severity::Points(10),
+        response: ResponseMode::Alert,
+    });
+    first.save_to(&path).unwrap();
+
+    let mut second = Policy::default();
+    second.add_rule(Rule {
+        path: "/tmp/second".to_owned(),
+        condition: Condition::Write,
+        severity: Severity::Critical,
+        response: ResponseMode::Alert,
+    });
+    second.save_to(&path).unwrap();
+
+    let (loaded, health) = Policy::load_checked(&path);
+    assert_eq!(loaded.watchlist[0].path, "/tmp/second");
+    assert_eq!(health.as_str(), "valid");
+
+    // Nothing is left lying about in the directory.
+    let dir = path.parent().unwrap();
+    let leftovers: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains("atomic-replace") && name.contains(".tmp-"))
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "temporary files survived: {leftovers:?}"
+    );
+
+    std::fs::remove_file(&path).unwrap();
+    std::fs::remove_file(Policy::backup_path(&path)).unwrap();
+}
+
+/// Two writers at once must leave one whole policy, never a blend of both.
+#[test]
+fn concurrent_writers_leave_a_readable_policy() {
+    let path = temp("concurrent");
+    let _ = std::fs::remove_file(&path);
+
+    std::thread::scope(|scope| {
+        for index in 0..8_u32 {
+            let path = path.clone();
+            scope.spawn(move || {
+                let mut policy = Policy::default();
+                policy.add_rule(Rule {
+                    path: format!("/tmp/writer-{index}"),
+                    condition: Condition::Observed,
+                    severity: Severity::Critical,
+                    response: ResponseMode::Alert,
+                });
+                // A failed write is acceptable under contention; a corrupt
+                // file is not, and that is what the load below checks.
+                let _ = policy.save_to(&path);
+            });
+        }
+    });
+
+    let (loaded, health) = Policy::load_checked(&path);
+    assert_eq!(health.as_str(), "valid", "{:?}", health.detail());
+    assert_eq!(loaded.watchlist.len(), 1);
+    assert!(loaded.watchlist[0].path.starts_with("/tmp/writer-"));
+
+    std::fs::remove_file(&path).unwrap();
+    let _ = std::fs::remove_file(Policy::backup_path(&path));
+}
+
+/// PowerShell's default redirection writes UTF-8 with a byte-order mark, and a
+/// user who saves their policy the obvious way on Windows should not be told
+/// their file is malformed.
+#[test]
+fn a_byte_order_mark_does_not_make_a_policy_malformed() {
+    let path = temp("bom");
+    std::fs::write(&path, "\u{feff}{\"thresholds\":{\"recon_hosts\":42}}").unwrap();
+    let (loaded, health) = Policy::load_checked(&path);
+    assert_eq!(health.as_str(), "valid");
+    assert_eq!(loaded.thresholds.recon_hosts, 42);
+    std::fs::remove_file(&path).unwrap();
+}
+
+/// Reported by the `config` fuzz target. Serde fills a struct from a JSON array
+/// positionally, so `[[0]]` parsed cleanly into a policy whose every weight was
+/// zero — which scores every agent on the host at zero, silently, and is worse
+/// than falling back to the defaults.
+#[test]
+fn a_json_array_is_not_a_policy() {
+    for text in ["[[0]]", "[]", "[[30]]", "0", "\"policy\"", "null", "true"] {
+        let error = Policy::parse(text.as_bytes())
+            .err()
+            .unwrap_or_else(|| panic!("{text} was accepted as a policy"));
+        assert!(!error.is_empty());
+    }
+    // The shapes that are policies still are.
+    assert_eq!(
+        Policy::parse(b"{}").unwrap().weights.arbitrary_execution,
+        30
+    );
+    assert_eq!(
+        Policy::parse(br#"{"weights":{"arbitrary_execution":7}}"#)
+            .unwrap()
+            .weights
+            .arbitrary_execution,
+        7
+    );
+}

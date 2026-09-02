@@ -8,7 +8,8 @@
 
 use std::collections::BTreeMap;
 use topgent_facts::{
-    Access, ByteCounters, Claim, Confidence, Direction, Fact, Protocol, Subject, Tri, UnixMillis,
+    Access, ByteCounters, Claim, Confidence, Direction, Fact, Protocol, Reachability, Subject, Tri,
+    UnixMillis,
 };
 
 /// Stable identity of one agent.
@@ -70,7 +71,17 @@ pub struct ResourceAccess {
     /// What the agent actually touched.
     pub observed: Tri,
     /// What it could touch with no further permission.
+    ///
+    /// `Yes` only where the kernel was asked and answered. A path that merely
+    /// resolves leaves this `Unknown` and records why in [`Self::reach_evidence`],
+    /// because a stat that succeeded is not a read that would.
     pub reachable: Tri,
+    /// What the reachability probe actually established, when one ran.
+    ///
+    /// Kept alongside the column so a report can print the finding rather than
+    /// a word. Account-level in every case: process confinement is not
+    /// evaluated, and the statement says so.
+    pub reach_evidence: Option<Reachability>,
     /// Whether the path holds a credential.
     pub sensitive: bool,
     /// The strongest access seen across all three columns.
@@ -327,6 +338,12 @@ pub struct Rejected {
     pub reason: RejectReason,
     /// The claim kind, for reporting.
     pub claim_kind: &'static str,
+    /// The identity it was about, when it had one.
+    ///
+    /// An attribution defect is only findable if the refused facts name what
+    /// they were about, so unanchored activity is kept here rather than
+    /// dropped.
+    pub subject: Option<AgentId>,
 }
 
 /// Why the fold refused a fact.
@@ -339,6 +356,14 @@ pub struct Rejected {
 pub enum RejectReason {
     /// The fact is about a subject that is not a process, and nothing anchors it.
     UnanchoredSubject,
+    /// The fact is about a process nothing established to be an agent.
+    ///
+    /// The filesystem, network-event and DNS collectors build their pid maps
+    /// from every visible process, so with audit sensors live an unrelated
+    /// shell that opened a watched file used to arrive in the inventory with a
+    /// risk score of its own. Being seen doing something is not the same as
+    /// being an agent.
+    UnanchoredIdentity,
 }
 
 /// The whole picture, folded from a fact stream.
@@ -394,6 +419,7 @@ struct ResourceBuilder {
     declared: Tri,
     observed: Tri,
     reachable: Tri,
+    reach_evidence: Option<Reachability>,
     sensitive: bool,
     access: Option<Access>,
     evidence: Vec<String>,
@@ -407,6 +433,7 @@ impl Default for ResourceBuilder {
             declared: Tri::Unknown,
             observed: Tri::Unknown,
             reachable: Tri::Unknown,
+            reach_evidence: None,
             sensitive: false,
             access: None,
             evidence: Vec::new(),
@@ -420,6 +447,25 @@ impl ResourceBuilder {
         if !self.evidence.contains(&probe) {
             self.evidence.push(probe);
         }
+    }
+
+    /// Record what a reachability probe established.
+    ///
+    /// Only the kernel's own answer closes the column. A path that resolves
+    /// proves the directory chain is traversable and nothing about whether the
+    /// file opens, so the cell stays `Unknown` and the evidence carries what
+    /// was actually established. The stronger evidence wins where one path is
+    /// probed more than once, which keeps the fold order-independent.
+    fn reach(&mut self, access: Access, sensitive: bool, evidence: Reachability) {
+        if evidence.establishes_readability() {
+            self.reachable = Tri::Yes;
+            self.widen(access);
+        }
+        self.reach_evidence = Some(match self.reach_evidence {
+            Some(kept) if kept.establishes_readability() => kept,
+            _ => evidence,
+        });
+        self.sensitive |= sensitive;
     }
 
     /// Widen the recorded access to cover both what we had and what we just saw.
@@ -483,6 +529,14 @@ pub fn fold_with_home(facts: &[Fact], home: Option<&str>) -> AgentGraph {
     let mut builders: BTreeMap<AgentId, Builder> = BTreeMap::new();
     let mut rejected = Vec::new();
 
+    // Pass one: which identities were actually established as agents.
+    //
+    // Order-independence is why this is a separate pass rather than a check
+    // inside the fold: an extension host's `EditorExtensionActive` can arrive
+    // before its `ProcessSeen`, and shuffling the input must not change the
+    // output. The suite asserts that property directly.
+    let anchored = anchored_identities(facts);
+
     for fact in facts {
         let Subject::Process { pid, started_at } = *fact.subject() else {
             // A fact about a bare path or endpoint has no agent to attach to.
@@ -491,11 +545,20 @@ pub fn fold_with_home(facts: &[Fact], home: Option<&str>) -> AgentGraph {
             rejected.push(Rejected {
                 reason: RejectReason::UnanchoredSubject,
                 claim_kind: fact.claim().kind(),
+                subject: None,
             });
             continue;
         };
 
         let id = AgentId { pid, started_at };
+        if !anchored.contains(&id) {
+            rejected.push(Rejected {
+                reason: RejectReason::UnanchoredIdentity,
+                claim_kind: fact.claim().kind(),
+                subject: Some(id),
+            });
+            continue;
+        }
         let b = builders.entry(id).or_default();
         b.fact_count += 1;
         b.best_confidence = Some(match b.best_confidence {
@@ -519,9 +582,52 @@ pub fn fold_with_home(facts: &[Fact], home: Option<&str>) -> AgentGraph {
     let mut agents: Vec<Agent> = builders.into_iter().map(|(id, b)| finish(id, b)).collect();
     agents.sort_by_key(|a| (a.id.pid, a.id.started_at));
 
-    rejected.sort_by(|a, b| a.claim_kind.cmp(b.claim_kind));
+    rejected.sort_by(|a, b| {
+        (a.claim_kind, a.subject.map(|id| (id.pid, id.started_at)))
+            .cmp(&(b.claim_kind, b.subject.map(|id| (id.pid, id.started_at))))
+    });
 
     AgentGraph { agents, rejected }
+}
+
+/// The identities the fact stream established as agents.
+///
+/// An anchor is a `ProcessSeen` — which carries the executable and the owner
+/// that detection actually rests on — plus one of the two things that says
+/// *what* it is: a recognised family, or an agent extension verified active
+/// inside an editor host.
+///
+/// Neither half is enough alone. `ProcessSeen` is emitted for extension hosts
+/// and, with `include_unrecognised`, for every process on the machine.
+/// `AgentFamily` on its own has none of the executable and owner evidence that
+/// normally accompanies a detection.
+///
+/// A descendant is deliberately *not* a third way in. An agent that spawns
+/// `curl` is answerable for what `curl` does, but the activity timeline already
+/// attributes a descendant's facts to the agent that spawned it, working from
+/// the fact stream rather than from the inventory. Anchoring descendants as
+/// well put a blank row in the inventory for every helper process an agent had
+/// touched — nineteen of them on one lab host — which is the same defect this
+/// function exists to close, wearing a different hat.
+fn anchored_identities(facts: &[Fact]) -> std::collections::BTreeSet<AgentId> {
+    let mut seen = std::collections::BTreeSet::new();
+    let mut named = std::collections::BTreeSet::new();
+    for fact in facts {
+        let Subject::Process { pid, started_at } = *fact.subject() else {
+            continue;
+        };
+        let id = AgentId { pid, started_at };
+        match fact.claim() {
+            Claim::ProcessSeen { .. } => {
+                seen.insert(id);
+            }
+            Claim::AgentFamily { .. } | Claim::EditorExtensionActive { .. } => {
+                named.insert(id);
+            }
+            _ => {}
+        }
+    }
+    seen.intersection(&named).copied().collect()
 }
 
 fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
@@ -607,11 +713,10 @@ fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
             path,
             access,
             sensitive,
+            evidence,
         } => {
             let r = b.resources.entry(resource_key(path, home)).or_default();
-            r.reachable = Tri::Yes;
-            r.sensitive |= *sensitive;
-            r.widen(*access);
+            r.reach(*access, *sensitive, *evidence);
             r.note(probe);
         }
         Claim::AgentFamily { family } => b.family = Some(family.clone()),
@@ -668,6 +773,7 @@ fn finish(id: AgentId, b: Builder) -> Agent {
                     other => other,
                 },
                 reachable: r.reachable,
+                reach_evidence: r.reach_evidence,
                 sensitive: r.sensitive,
                 access: r.access,
                 evidence,

@@ -222,6 +222,7 @@ fn every_claim_has_a_stable_kind() {
             path: "~/.ssh/id_ed25519".to_owned(),
             access: Access::Read,
             sensitive: true,
+            evidence: topgent_facts::Reachability::AccountReadable,
         },
         Claim::AgentFamily {
             family: "claude-code".to_owned(),

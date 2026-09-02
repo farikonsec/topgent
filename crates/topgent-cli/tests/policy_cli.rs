@@ -25,11 +25,30 @@ fn fixture(name: &str, value: &Value) -> std::path::PathBuf {
     path
 }
 
-fn report(grade: &str, disposition: &str, coverage: &str) -> Value {
+/// A coverage table naming every rule this build's catalogue declares.
+///
+/// Was a single `{"rule":"TEST"}` entry, which the gate had no way to tell from
+/// a complete table: `all()` on a one-element array is the same `true` as on an
+/// empty one.
+fn coverage(state: &str) -> Vec<Value> {
+    topgent_policy::catalogue::builtin()
+        .expect("the built-in catalogue loads")
+        .factors
+        .iter()
+        .map(|factor| {
+            json!({
+                "rule": factor.code, "sensor": factor.sensor,
+                "state": state, "verification": "automated",
+            })
+        })
+        .collect()
+}
+
+fn report(grade: &str, disposition: &str, state: &str) -> Value {
     json!({
         "agents": [{"asset_id":"urn:topgent:agent:test", "grade":grade}],
         "assets": [{"id":"urn:topgent:model:test", "kind":"model", "disposition":disposition}],
-        "coverage": [{"rule":"TEST", "state":coverage}]
+        "coverage": coverage(state)
     })
 }
 

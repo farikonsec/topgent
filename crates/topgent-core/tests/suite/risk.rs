@@ -284,6 +284,10 @@ fn a_service_identity_reduces_every_factor_by_a_quarter() {
 fn an_agent_whose_owner_is_unknown_sits_between_the_two() {
     let risk = assess(&only(
         &Stream::new(1)
+            // Owner unstated by the operating system, which the contract
+            // carries as uid zero. The process fact is required: the fold no
+            // longer builds an agent out of a family claim alone.
+            .seen_unrecognised("/usr/bin/python3", 0, "unknown")
             .family("unclassified")
             .connector("shell", Access::Execute)
             .build(),
@@ -624,16 +628,20 @@ fn a_disallowed_asset_is_critical_but_unreviewed_and_approved_assets_are_not() {
 
 #[test]
 fn a_disallowed_shared_host_extension_is_scored_without_relabelling_the_host() {
-    let agent = only(&[fixtures::fact(
-        Subject::Process {
-            pid: 42,
-            started_at: fixtures::at(100),
-        },
-        Claim::EditorExtensionActive {
-            family: "continue".to_owned(),
-            extension_id: "continue.continue".to_owned(),
-        },
-    )]);
+    let host = Subject::Process {
+        pid: 42,
+        started_at: fixtures::at(100),
+    };
+    let agent = only(&[
+        fixtures::host_process(host.clone()),
+        fixtures::fact(
+            host,
+            Claim::EditorExtensionActive {
+                family: "continue".to_owned(),
+                extension_id: "continue.continue".to_owned(),
+            },
+        ),
+    ]);
     assert_eq!(agent.family, None);
 
     let id = extension_asset_id("continue", "continue.continue");

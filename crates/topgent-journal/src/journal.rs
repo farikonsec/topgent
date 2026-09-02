@@ -80,6 +80,48 @@ pub struct Journal {
     dir: PathBuf,
 }
 
+/// Exclusive right to rewrite one journal record file, released on drop.
+///
+/// Deliberately not [`SweepLock`], whose staleness test reads the timestamp the
+/// holder wrote *into* the file. Between a holder's `create_new` and its write
+/// the file is empty, and an empty file reads as abandoned — so under real
+/// contention a second writer reclaimed a live lock and both proceeded. That is
+/// tolerable once per sweep and not tolerable once per record.
+///
+/// Abandonment is judged by the filesystem's own timestamp instead, which
+/// exists from the moment the file does.
+struct RecordLock {
+    path: PathBuf,
+}
+
+impl RecordLock {
+    fn acquire(path: &Path) -> Option<Self> {
+        match OpenOptions::new().create_new(true).write(true).open(path) {
+            Ok(_) => Some(Self {
+                path: path.to_path_buf(),
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+                let abandoned = std::fs::metadata(path)
+                    .and_then(|metadata| metadata.modified())
+                    .ok()
+                    .and_then(|modified| modified.elapsed().ok())
+                    .is_some_and(|age| age.as_millis() >= u128::from(crate::SWEEP_LOCK_STALE_MS));
+                if abandoned {
+                    let _ = std::fs::remove_file(path);
+                }
+                None
+            }
+            Err(_) => None,
+        }
+    }
+}
+
+impl Drop for RecordLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
 impl Journal {
     /// Open the journal at the default location.
     #[must_use]
@@ -148,59 +190,57 @@ impl Journal {
         path: Option<&str>,
         observed_at: u64,
     ) -> std::io::Result<ToolAttestationRecord> {
-        let name = bounded_metadata(name, 64);
-        let state = bounded_metadata(state, 32);
-        let path = path.map(|value| bounded_metadata(value, 512));
-        let mut records = self.tool_attestations()?;
-        let record = if let Some(record) = records.iter_mut().find(|record| record.name == name) {
-            if record.state != state || record.path != path {
-                record.previous_state = Some(record.state.clone());
-                record.changed_at = Some(observed_at);
-            }
-            record.state.clone_from(&state);
-            record.path.clone_from(&path);
-            record.last_seen_at = observed_at;
-            record.clone()
-        } else {
-            let record = ToolAttestationRecord {
-                name,
-                state,
-                path,
-                first_seen_at: observed_at,
-                last_seen_at: observed_at,
-                previous_state: None,
-                changed_at: None,
+        self.with_record_lock("tool-attestations", || {
+            let name = bounded_metadata(name, 64);
+            let state = bounded_metadata(state, 32);
+            let path = path.map(|value| bounded_metadata(value, 512));
+            let mut records = self.tool_attestations()?;
+            let record = if let Some(record) = records.iter_mut().find(|record| record.name == name)
+            {
+                if record.state != state || record.path != path {
+                    record.previous_state = Some(record.state.clone());
+                    record.changed_at = Some(observed_at);
+                }
+                record.state.clone_from(&state);
+                record.path.clone_from(&path);
+                record.last_seen_at = observed_at;
+                record.clone()
+            } else {
+                let record = ToolAttestationRecord {
+                    name,
+                    state,
+                    path,
+                    first_seen_at: observed_at,
+                    last_seen_at: observed_at,
+                    previous_state: None,
+                    changed_at: None,
+                };
+                records.push(record.clone());
+                record
             };
-            records.push(record.clone());
-            record
-        };
-        records.sort_by(|left, right| left.name.cmp(&right.name));
-        if records.len() > MAX_TOOL_ATTESTATIONS {
-            records.drain(..records.len() - MAX_TOOL_ATTESTATIONS);
-        }
-        let value = Value::Array(
-            records
-                .iter()
-                .map(|record| {
-                    json!({
-                        "name": record.name,
-                        "state": record.state,
-                        "path": record.path,
-                        "first_seen_at": record.first_seen_at,
-                        "last_seen_at": record.last_seen_at,
-                        "previous_state": record.previous_state,
-                        "changed_at": record.changed_at,
+            records.sort_by(|left, right| left.name.cmp(&right.name));
+            if records.len() > MAX_TOOL_ATTESTATIONS {
+                records.drain(..records.len() - MAX_TOOL_ATTESTATIONS);
+            }
+            let value = Value::Array(
+                records
+                    .iter()
+                    .map(|record| {
+                        json!({
+                            "name": record.name,
+                            "state": record.state,
+                            "path": record.path,
+                            "first_seen_at": record.first_seen_at,
+                            "last_seen_at": record.last_seen_at,
+                            "previous_state": record.previous_state,
+                            "changed_at": record.changed_at,
+                        })
                     })
-                })
-                .collect::<Vec<_>>(),
-        );
-        create_dir_all(&self.dir)?;
-        let temporary = self
-            .dir
-            .join(format!("tool-attestations.{}.tmp", std::process::id()));
-        std::fs::write(&temporary, value.to_string())?;
-        std::fs::rename(&temporary, self.tool_attestation_path())?;
-        Ok(record)
+                    .collect::<Vec<_>>(),
+            );
+            self.replace_atomically(&self.tool_attestation_path(), &value)?;
+            Ok(record)
+        })
     }
 
     /// Every retained sensor-binary attestation.
@@ -255,43 +295,123 @@ impl Journal {
         active: bool,
         now: u64,
     ) -> std::io::Result<(&'static str, ResponseTransition)> {
-        let key = bounded_metadata(key, 512);
-        let mut records = self.response_transitions()?;
-        let (label, record) = if let Some(record) = records.iter_mut().find(|item| item.key == key)
-        {
-            let label = match (record.active, active) {
-                (false, true) => "triggered",
-                (true, true) => "suppressed",
-                (true, false) => "recovered",
-                (false, false) => "inactive",
-            };
-            if record.active != active {
-                record.last_changed_at = now;
+        self.with_record_lock("response-transitions", || {
+            let key = bounded_metadata(key, 512);
+            let mut records = self.response_transitions()?;
+            let (label, record) =
+                if let Some(record) = records.iter_mut().find(|item| item.key == key) {
+                    let label = match (record.active, active) {
+                        (false, true) => "triggered",
+                        (true, true) => "suppressed",
+                        (true, false) => "recovered",
+                        (false, false) => "inactive",
+                    };
+                    if record.active != active {
+                        record.last_changed_at = now;
+                    }
+                    if !record.active && active {
+                        record.trigger_count = record.trigger_count.saturating_add(1);
+                    }
+                    record.active = active;
+                    record.last_seen_at = now;
+                    (label, record.clone())
+                } else {
+                    let record = ResponseTransition {
+                        key,
+                        active,
+                        last_seen_at: now,
+                        last_changed_at: now,
+                        trigger_count: u64::from(active),
+                    };
+                    let label = if active { "triggered" } else { "inactive" };
+                    records.push(record.clone());
+                    (label, record)
+                };
+            records.sort_by_key(|item| item.last_seen_at);
+            if records.len() > MAX_RESPONSE_TRANSITIONS {
+                records.drain(..records.len() - MAX_RESPONSE_TRANSITIONS);
             }
-            if !record.active && active {
-                record.trigger_count = record.trigger_count.saturating_add(1);
+            self.save_response_transitions(&records)?;
+            Ok((label, record))
+        })
+    }
+
+    /// Run a read-modify-write against one journal file under an exclusive lock.
+    ///
+    /// An atomic replace stops a reader seeing half a file. It does not stop two
+    /// writers each reading the whole record set, each adding their own entry,
+    /// and the second overwriting the first — which loses records silently,
+    /// with no error anywhere. Eight threads writing eight keys left two.
+    ///
+    /// The lock is an exclusive create, reclaimed after
+    /// [`crate::SWEEP_LOCK_STALE_MS`] so a surface killed mid-write cannot
+    /// silence the journal forever. It holds across processes as well as
+    /// threads, which matters because the desktop application and the command
+    /// line write the same files.
+    fn with_record_lock<T>(
+        &self,
+        name: &str,
+        work: impl FnOnce() -> std::io::Result<T>,
+    ) -> std::io::Result<T> {
+        create_dir_all(&self.dir)?;
+        let path = self.dir.join(format!("{name}.lock"));
+        // Bounded, because waiting forever on a lock is a hang and a hang in a
+        // monitor is an outage. A writer that cannot get in within the window
+        // says so rather than proceeding and losing somebody's record.
+        for attempt in 0..200_u32 {
+            if let Some(_lock) = RecordLock::acquire(&path) {
+                return work();
             }
-            record.active = active;
-            record.last_seen_at = now;
-            (label, record.clone())
-        } else {
-            let record = ResponseTransition {
-                key,
-                active,
-                last_seen_at: now,
-                last_changed_at: now,
-                trigger_count: u64::from(active),
-            };
-            let label = if active { "triggered" } else { "inactive" };
-            records.push(record.clone());
-            (label, record)
-        };
-        records.sort_by_key(|item| item.last_seen_at);
-        if records.len() > MAX_RESPONSE_TRANSITIONS {
-            records.drain(..records.len() - MAX_RESPONSE_TRANSITIONS);
+            std::thread::sleep(std::time::Duration::from_millis(
+                u64::from(attempt.min(5)) + 1,
+            ));
         }
-        self.save_response_transitions(&records)?;
-        Ok((label, record))
+        Err(std::io::Error::new(
+            std::io::ErrorKind::WouldBlock,
+            format!("another writer held the {name} journal lock throughout"),
+        ))
+    }
+
+    /// Replace one journal file with `value`, atomically.
+    ///
+    /// Nine call sites each rolled their own, and every one named the temporary
+    /// file `<record>.<pid>.tmp`. Two writers *inside one process* therefore
+    /// collided on the same scratch file: both created it, one renamed it away,
+    /// and the other's rename failed with the file gone. The visible symptom was
+    /// a response decision reported with transition `unknown` and
+    /// `transition_persistent: false` — the journal, which is the audit log,
+    /// silently failing to record a state change. It also left orphaned `.tmp`
+    /// files behind.
+    ///
+    /// The scratch name now carries the thread and a monotonic counter as well
+    /// as the pid, so no two writers can pick the same one, and a failed write
+    /// cleans up after itself rather than accumulating.
+    fn replace_atomically(&self, target: &Path, value: &Value) -> std::io::Result<()> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static ATTEMPT: AtomicU64 = AtomicU64::new(0);
+
+        create_dir_all(&self.dir)?;
+        let name = target.file_name().map_or_else(
+            || "journal".to_owned(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        let scratch = self.dir.join(format!(
+            "{name}.{}.{}.tmp",
+            std::process::id(),
+            ATTEMPT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let outcome = (|| -> std::io::Result<()> {
+            let mut file = File::create(&scratch)?;
+            file.write_all(value.to_string().as_bytes())?;
+            file.flush()?;
+            file.sync_all()?;
+            drop(file);
+            std::fs::rename(&scratch, target)
+        })();
+        if outcome.is_err() {
+            let _ = std::fs::remove_file(&scratch);
+        }
+        outcome
     }
 
     pub(crate) fn response_transitions(&self) -> std::io::Result<Vec<ResponseTransition>> {
@@ -310,19 +430,11 @@ impl Journal {
     }
 
     fn save_response_transitions(&self, records: &[ResponseTransition]) -> std::io::Result<()> {
-        create_dir_all(&self.dir)?;
-        let temporary = self
-            .dir
-            .join(format!("response-transitions.{}.tmp", std::process::id()));
-        let mut file = File::create(&temporary)?;
         let values = records
             .iter()
             .map(response_transition_json)
             .collect::<Vec<_>>();
-        file.write_all(Value::Array(values).to_string().as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(temporary, self.response_transition_path())
+        self.replace_atomically(&self.response_transition_path(), &Value::Array(values))
     }
 
     /// Read durable sensor-health aggregates.
@@ -361,64 +473,58 @@ impl Journal {
         dropped_events: Option<u64>,
         detail: Option<&str>,
     ) -> std::io::Result<SensorHealthRecord> {
-        let id = bounded_metadata(id, 96);
-        let state = bounded_metadata(state, 32);
-        let available = state == "available";
-        let mut records = self.sensor_health_records()?;
-        let record = if let Some(record) = records.iter_mut().find(|record| record.id == id) {
-            record.state.clone_from(&state);
-            record.last_observed_at = observed_at;
-            record.total_runs = record.total_runs.saturating_add(1);
-            record.total_facts = record
-                .total_facts
-                .saturating_add(u64::try_from(fact_count).unwrap_or(u64::MAX));
-            record.detail = detail.map(|value| bounded_metadata(value, 512));
-            if let Some(dropped) = dropped_events {
-                record.dropped_events = Some(dropped);
-            }
-            if available {
-                record.last_success_at = Some(observed_at);
-                record.consecutive_failures = 0;
+        self.with_record_lock("sensor-health", || {
+            let id = bounded_metadata(id, 96);
+            let state = bounded_metadata(state, 32);
+            let available = state == "available";
+            let mut records = self.sensor_health_records()?;
+            let record = if let Some(record) = records.iter_mut().find(|record| record.id == id) {
+                record.state.clone_from(&state);
+                record.last_observed_at = observed_at;
+                record.total_runs = record.total_runs.saturating_add(1);
+                record.total_facts = record
+                    .total_facts
+                    .saturating_add(u64::try_from(fact_count).unwrap_or(u64::MAX));
+                record.detail = detail.map(|value| bounded_metadata(value, 512));
+                if let Some(dropped) = dropped_events {
+                    record.dropped_events = Some(dropped);
+                }
+                if available {
+                    record.last_success_at = Some(observed_at);
+                    record.consecutive_failures = 0;
+                } else {
+                    record.last_error_at = Some(observed_at);
+                    record.consecutive_failures = record.consecutive_failures.saturating_add(1);
+                }
+                record.clone()
             } else {
-                record.last_error_at = Some(observed_at);
-                record.consecutive_failures = record.consecutive_failures.saturating_add(1);
-            }
-            record.clone()
-        } else {
-            let record = SensorHealthRecord {
-                id,
-                state,
-                last_observed_at: observed_at,
-                last_success_at: available.then_some(observed_at),
-                last_error_at: (!available).then_some(observed_at),
-                consecutive_failures: u64::from(!available),
-                total_runs: 1,
-                total_facts: u64::try_from(fact_count).unwrap_or(u64::MAX),
-                dropped_events,
-                detail: detail.map(|value| bounded_metadata(value, 512)),
+                let record = SensorHealthRecord {
+                    id,
+                    state,
+                    last_observed_at: observed_at,
+                    last_success_at: available.then_some(observed_at),
+                    last_error_at: (!available).then_some(observed_at),
+                    consecutive_failures: u64::from(!available),
+                    total_runs: 1,
+                    total_facts: u64::try_from(fact_count).unwrap_or(u64::MAX),
+                    dropped_events,
+                    detail: detail.map(|value| bounded_metadata(value, 512)),
+                };
+                records.push(record.clone());
+                record
             };
-            records.push(record.clone());
-            record
-        };
-        records.sort_by(|left, right| left.id.cmp(&right.id));
-        if records.len() > MAX_SENSOR_HEALTH_RECORDS {
-            records.drain(..records.len() - MAX_SENSOR_HEALTH_RECORDS);
-        }
-        self.save_sensor_health(&records)?;
-        Ok(record)
+            records.sort_by(|left, right| left.id.cmp(&right.id));
+            if records.len() > MAX_SENSOR_HEALTH_RECORDS {
+                records.drain(..records.len() - MAX_SENSOR_HEALTH_RECORDS);
+            }
+            self.save_sensor_health(&records)?;
+            Ok(record)
+        })
     }
 
     fn save_sensor_health(&self, records: &[SensorHealthRecord]) -> std::io::Result<()> {
-        create_dir_all(&self.dir)?;
-        let temporary = self
-            .dir
-            .join(format!("sensor-health.{}.tmp", std::process::id()));
-        let mut file = File::create(&temporary)?;
         let values = records.iter().map(sensor_health_json).collect::<Vec<_>>();
-        file.write_all(Value::Array(values).to_string().as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(temporary, self.sensor_health_path())
+        self.replace_atomically(&self.sensor_health_path(), &Value::Array(values))
     }
 
     /// Record a durable response cooldown for one exact identity and scope.
@@ -481,19 +587,11 @@ impl Journal {
     }
 
     fn save_response_cooldowns(&self, records: &[ResponseCooldown]) -> std::io::Result<()> {
-        create_dir_all(&self.dir)?;
-        let temporary = self
-            .dir
-            .join(format!("response-cooldowns.{}.tmp", std::process::id()));
-        let mut file = File::create(&temporary)?;
         let values = records
             .iter()
             .map(response_cooldown_json)
             .collect::<Vec<_>>();
-        file.write_all(Value::Array(values).to_string().as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(temporary, self.response_cooldown_path())
+        self.replace_atomically(&self.response_cooldown_path(), &Value::Array(values))
     }
 
     /// Read approval records, expiring elapsed pending requests fail closed.
@@ -549,29 +647,31 @@ impl Journal {
         now: u64,
         ttl_ms: u64,
     ) -> std::io::Result<ApprovalRecord> {
-        let scope = bounded_metadata(scope, 256);
-        let id = approval_id(pid, started_at, &scope);
-        let mut records = self.approval_records(now)?;
-        if let Some(existing) = records.iter().find(|record| record.id == id) {
-            return Ok(existing.clone());
-        }
-        let record = ApprovalRecord {
-            id,
-            pid,
-            started_at,
-            scope,
-            state: ApprovalRecordState::Pending,
-            created_at: now,
-            expires_at: now.saturating_add(ttl_ms.max(1)),
-            resolved_at: None,
-        };
-        records.push(record.clone());
-        records.sort_by_key(|item| item.created_at);
-        if records.len() > MAX_APPROVAL_RECORDS {
-            records.drain(..records.len() - MAX_APPROVAL_RECORDS);
-        }
-        self.save_approval_records(&records)?;
-        Ok(record)
+        self.with_record_lock("approvals", || {
+            let scope = bounded_metadata(scope, 256);
+            let id = approval_id(pid, started_at, &scope);
+            let mut records = self.approval_records(now)?;
+            if let Some(existing) = records.iter().find(|record| record.id == id) {
+                return Ok(existing.clone());
+            }
+            let record = ApprovalRecord {
+                id,
+                pid,
+                started_at,
+                scope,
+                state: ApprovalRecordState::Pending,
+                created_at: now,
+                expires_at: now.saturating_add(ttl_ms.max(1)),
+                resolved_at: None,
+            };
+            records.push(record.clone());
+            records.sort_by_key(|item| item.created_at);
+            if records.len() > MAX_APPROVAL_RECORDS {
+                records.drain(..records.len() - MAX_APPROVAL_RECORDS);
+            }
+            self.save_approval_records(&records)?;
+            Ok(record)
+        })
     }
 
     /// Resolve one unexpired request for the same exact process identity.
@@ -591,40 +691,34 @@ impl Journal {
         decision: ApprovalRecordState,
         now: u64,
     ) -> std::io::Result<Option<ApprovalRecord>> {
-        if !matches!(
-            decision,
-            ApprovalRecordState::Approved | ApprovalRecordState::Denied
-        ) {
-            return Ok(None);
-        }
-        let mut records = self.approval_records(now)?;
-        let Some(record) = records.iter_mut().find(|record| {
-            record.id == id
-                && record.pid == pid
-                && record.started_at == started_at
-                && record.state == ApprovalRecordState::Pending
-                && now < record.expires_at
-        }) else {
-            return Ok(None);
-        };
-        record.state = decision;
-        record.resolved_at = Some(now);
-        let resolved = record.clone();
-        self.save_approval_records(&records)?;
-        Ok(Some(resolved))
+        self.with_record_lock("approvals", || {
+            if !matches!(
+                decision,
+                ApprovalRecordState::Approved | ApprovalRecordState::Denied
+            ) {
+                return Ok(None);
+            }
+            let mut records = self.approval_records(now)?;
+            let Some(record) = records.iter_mut().find(|record| {
+                record.id == id
+                    && record.pid == pid
+                    && record.started_at == started_at
+                    && record.state == ApprovalRecordState::Pending
+                    && now < record.expires_at
+            }) else {
+                return Ok(None);
+            };
+            record.state = decision;
+            record.resolved_at = Some(now);
+            let resolved = record.clone();
+            self.save_approval_records(&records)?;
+            Ok(Some(resolved))
+        })
     }
 
     fn save_approval_records(&self, records: &[ApprovalRecord]) -> std::io::Result<()> {
-        create_dir_all(&self.dir)?;
-        let temporary = self
-            .dir
-            .join(format!("approvals.{}.tmp", std::process::id()));
-        let mut file = File::create(&temporary)?;
         let values = records.iter().map(approval_record_json).collect::<Vec<_>>();
-        file.write_all(Value::Array(values).to_string().as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(temporary, self.approval_path())
+        self.replace_atomically(&self.approval_path(), &Value::Array(values))
     }
 
     /// Read bounded metadata-only activity history.
@@ -655,15 +749,7 @@ impl Journal {
     ///
     /// Returns directory, write, flush, sync, or atomic rename failures.
     pub fn save_activity_history(&self, activity: &Activity) -> std::io::Result<()> {
-        create_dir_all(&self.dir)?;
-        let temporary = self
-            .dir
-            .join(format!("activity-history.{}.tmp", std::process::id()));
-        let mut file = File::create(&temporary)?;
-        file.write_all(activity_json(activity).to_string().as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(temporary, self.activity_path())
+        self.replace_atomically(&self.activity_path(), &activity_json(activity))
     }
 
     /// Read bounded sanitized semantic context. Malformed records are skipped.
@@ -703,19 +789,11 @@ impl Journal {
         if records.len() > MAX_SEMANTIC_RECORDS {
             records.drain(..records.len() - MAX_SEMANTIC_RECORDS);
         }
-        create_dir_all(&self.dir)?;
-        let temporary = self
-            .dir
-            .join(format!("semantic-context.{}.tmp", std::process::id()));
-        let mut file = File::create(&temporary)?;
         let values = records
             .iter()
             .map(SemanticRecord::to_json)
             .collect::<Vec<_>>();
-        file.write_all(Value::Array(values).to_string().as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(temporary, self.semantic_path())
+        self.replace_atomically(&self.semantic_path(), &Value::Array(values))
     }
 
     /// Delete every locally retained semantic record.
@@ -758,16 +836,8 @@ impl Journal {
     ///
     /// Returns directory, write, flush, or rename failures.
     pub fn save_network_history(&self, records: &[NetworkRecord]) -> std::io::Result<()> {
-        create_dir_all(&self.dir)?;
         let values = records.iter().map(network_record_json).collect::<Vec<_>>();
-        let temporary = self
-            .dir
-            .join(format!("network-history.{}.tmp", std::process::id()));
-        let mut file = File::create(&temporary)?;
-        file.write_all(Value::Array(values).to_string().as_bytes())?;
-        file.flush()?;
-        file.sync_all()?;
-        std::fs::rename(temporary, self.network_path())
+        self.replace_atomically(&self.network_path(), &Value::Array(values))
     }
 
     /// Remove network history for one exact process instance.

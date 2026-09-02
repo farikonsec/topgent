@@ -13,7 +13,7 @@
 
 use crate::{Clock, CollectError, Collector, emit};
 use std::path::{Path, PathBuf};
-use topgent_facts::{Access, Claim, Confidence, Fact, Subject};
+use topgent_facts::{Access, Claim, Confidence, Fact, Reachability, Subject};
 
 /// Emits one reachability fact per sensitive path per agent.
 #[derive(Debug, Default)]
@@ -76,14 +76,59 @@ fn home_directory() -> Option<PathBuf> {
     None
 }
 
-/// Whether this process could read `path`, without reading it.
+/// What can be established about reading `path`, without reading it.
 ///
-/// Metadata only. The file is never opened.
+/// `None` means the path does not resolve at all, which is the only case that
+/// produces no fact.
+///
+/// The file is never opened, and that is deliberate rather than incidental.
+/// Opening races against a swap to a FIFO or a device between the check and the
+/// open, updates the access time, raises an audit event, hydrates a
+/// cloud-backed file, and would turn "Topgent does not open your credentials"
+/// into a sentence that is no longer true.
+///
+/// # What the answer is about
+///
+/// The **account**, not the process. `faccessat` is asked with the real
+/// identity, so it answers for the user Topgent runs as. A confined process
+/// with that same owner — a namespace, a container filesystem view, a chroot, a
+/// seccomp filter, a mandatory-access-control label, or a macOS sandbox profile
+/// — may be unable to read a path this says is readable. Topgent already scores
+/// `SANDBOX_ESCAPE`, so pretending otherwise would contradict a factor it
+/// ships. The evidence value carries the distinction to the report.
 #[must_use]
-pub fn readable(path: &Path) -> bool {
-    // `metadata` follows the link and succeeds only when the path resolves and
-    // the directory chain is traversable by this user.
-    std::fs::metadata(path).is_ok()
+pub fn readable(path: &Path) -> Option<Reachability> {
+    #[cfg(unix)]
+    {
+        use rustix::fs::{Access as Mode, CWD, accessat};
+        // `metadata` first, so a path that does not resolve produces no fact at
+        // all rather than a "not readable" one. It follows symlinks, which is
+        // what the agent would do.
+        if std::fs::metadata(path).is_err() {
+            return None;
+        }
+        // The kernel's own answer, access-control lists included. Asked with
+        // the real identity rather than the effective one because Topgent is
+        // not setuid and the account being reported on is the one it runs as.
+        if accessat(CWD, path, Mode::READ_OK, rustix::fs::AtFlags::empty()).is_ok() {
+            Some(Reachability::AccountReadable)
+        } else {
+            // Resolves, and the kernel says this account cannot read it. A
+            // mode-000 credential lands here, and used to be reported as a
+            // reachable secret.
+            None
+        }
+    }
+    // No `faccessat`. The honest degradation is the statement that was always
+    // true — the path exists and the directory chain is traversable — rather
+    // than continuing to call that readable. A real `AccessCheck` against the
+    // target process token upgrades this later; it does not restore it.
+    #[cfg(not(unix))]
+    {
+        std::fs::metadata(path)
+            .is_ok()
+            .then_some(Reachability::PathResolves)
+    }
 }
 
 impl Collector for ReachCollector {
@@ -97,11 +142,7 @@ impl Collector for ReachCollector {
                 what: "the account's home directory could not be determined".to_owned(),
             });
         };
-        let me = std::process::id();
-        let my_uid = crate::process::snapshot()
-            .into_iter()
-            .find(|p| p.pid == me)
-            .map_or(0, |p| p.uid);
+        let me = crate::process::current_owner();
 
         let sensitive = self
             .sensitive
@@ -110,17 +151,23 @@ impl Collector for ReachCollector {
 
         let paths = configured_paths(sensitive, self.watchlist.clone().unwrap_or_default());
 
-        let mut facts = Vec::new();
-        for p in crate::process::snapshot()
+        // Topgent can only speak for its own account. An agent running as
+        // somebody else is out of reach of this probe, and saying nothing is
+        // better than guessing.
+        //
+        // Ownership is *resolved* here rather than read off the sweep. The
+        // sweep leaves it `Unknown` on Windows because establishing it costs a
+        // query per process, and `Unknown` matches nothing — so comparing the
+        // unresolved value emptied the reachable column on Windows entirely,
+        // which is the same regression this file already carries a comment
+        // about. Narrowed to recognised agents first, so the cost is bounded.
+        let candidates: Vec<_> = crate::process::snapshot()
             .into_iter()
             .filter(|p| p.family.is_some())
-        {
-            // Topgent can only speak for its own user. An agent running as
-            // somebody else is out of reach of this probe, and saying nothing is
-            // better than guessing.
-            if p.uid != my_uid {
-                continue;
-            }
+            .collect();
+
+        let mut facts = Vec::new();
+        for p in crate::process::owned_by(candidates, &me) {
             let subject = Subject::Process {
                 pid: p.pid,
                 started_at: p.started_at,
@@ -133,10 +180,15 @@ impl Collector for ReachCollector {
                 } else {
                     (home.join(configured), format!("~/{configured}"))
                 };
-                if readable(&full) {
+                if let Some(evidence) = readable(&full) {
                     facts.extend(emit(
                         ID,
-                        &format!("stat {display} as uid {} ({what})", p.uid),
+                        &format!(
+                            "{} {display} as {} ({what}): {}",
+                            if cfg!(unix) { "faccessat" } else { "stat" },
+                            p.owner.label(),
+                            evidence.statement()
+                        ),
                         Confidence::Certain,
                         clock,
                         subject.clone(),
@@ -144,6 +196,7 @@ impl Collector for ReachCollector {
                             path: display,
                             access: Access::Read,
                             sensitive: *is_sensitive,
+                            evidence,
                         },
                     ));
                 }
@@ -175,6 +228,141 @@ mod tests {
             paths.get(".ssh/id_ed25519").map(|entry| entry.0),
             Some(true)
         );
+    }
+}
+
+/// The central finding: `readable` was `std::fs::metadata(path).is_ok()`, and
+/// stat needs the execute bit on the parent directory and nothing at all on the
+/// file. A mode-000 credential stats perfectly and cannot be opened, and every
+/// `SECRET_REACHABLE`, every `EXFILTRATION_PATH`, and the sentence "readable by
+/// this process owner" rested on it.
+#[cfg(all(test, unix))]
+mod readability {
+    #![allow(clippy::expect_used)]
+
+    use super::readable;
+    use std::io::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    use topgent_facts::Reachability;
+
+    /// Root reads anything, so the distinction these tests exist for does not
+    /// exist there. Skipping is the honest answer; asserting the opposite would
+    /// encode a false expectation.
+    fn running_as_root() -> bool {
+        matches!(
+            crate::process::current_owner(),
+            crate::process::Owner::Uid(0)
+        )
+    }
+
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(tag: &str) -> Self {
+            // nosemgrep: rust.lang.security.temp-dir.temp-dir - test fixture, per-process and per-thread name, not a trust boundary
+            let dir = std::env::temp_dir().join(format!(
+                "topgent-reach-{tag}-{}-{:?}",
+                std::process::id(),
+                std::thread::current().id()
+            ));
+            std::fs::create_dir_all(&dir).expect("a scratch directory");
+            Self(dir)
+        }
+
+        fn file(&self, name: &str, mode: u32) -> std::path::PathBuf {
+            let path = self.0.join(name);
+            let mut file = std::fs::File::create(&path).expect("a scratch file");
+            file.write_all(b"secret").expect("write");
+            drop(file);
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode))
+                .expect("set mode");
+            path
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn a_file_that_stats_and_cannot_be_opened_is_not_reachable() {
+        if running_as_root() {
+            return;
+        }
+        let scratch = Scratch::new("mode-000");
+        let unreadable = scratch.file("credential", 0o000);
+        assert!(
+            std::fs::metadata(&unreadable).is_ok(),
+            "the old check would have passed this"
+        );
+        assert!(
+            std::fs::read(&unreadable).is_err(),
+            "the file really is unreadable"
+        );
+        assert_eq!(
+            readable(&unreadable),
+            None,
+            "a credential nothing can open was reported as reachable"
+        );
+    }
+
+    #[test]
+    fn a_file_this_account_can_read_is_reachable_and_says_what_that_means() {
+        let scratch = Scratch::new("mode-600");
+        let credential = scratch.file("credential", 0o600);
+        let answer = readable(&credential).expect("an owner-readable file is reachable");
+        assert_eq!(answer, Reachability::AccountReadable);
+        assert!(answer.establishes_readability());
+        // The wording that ships with it names the limit rather than implying
+        // a process-level answer.
+        assert!(answer.statement().contains("account"));
+        assert!(answer.statement().contains("confinement not evaluated"));
+    }
+
+    #[test]
+    fn a_path_that_does_not_exist_produces_no_answer_at_all() {
+        let scratch = Scratch::new("absent");
+        assert_eq!(readable(&scratch.0.join("nothing-here")), None);
+    }
+
+    #[test]
+    fn a_symlink_is_followed_the_way_the_agent_would_follow_it() {
+        if running_as_root() {
+            return;
+        }
+        let scratch = Scratch::new("symlink");
+        let target = scratch.file("target", 0o000);
+        let link = scratch.0.join("link");
+        std::os::unix::fs::symlink(&target, &link).expect("a symlink");
+        // The link itself is fine; what it points at is not, and that is the
+        // question being asked.
+        assert_eq!(readable(&link), None);
+
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o600))
+            .expect("set mode");
+        assert_eq!(readable(&link), Some(Reachability::AccountReadable));
+    }
+
+    #[test]
+    fn a_directory_this_account_cannot_traverse_hides_what_is_under_it() {
+        if running_as_root() {
+            return;
+        }
+        let scratch = Scratch::new("no-traverse");
+        let closed = scratch.0.join("closed");
+        std::fs::create_dir_all(&closed).expect("a directory");
+        let inside = closed.join("credential");
+        std::fs::write(&inside, b"secret").expect("write");
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o000))
+            .expect("set mode");
+
+        assert_eq!(readable(&inside), None);
+
+        // Restored so the scratch directory can be removed.
+        std::fs::set_permissions(&closed, std::fs::Permissions::from_mode(0o700))
+            .expect("set mode");
     }
 }
 

@@ -34,6 +34,8 @@ pub enum Id {
     Activity,
     /// Sensor health.
     Health,
+    /// The binaries the sensors run.
+    Tools,
 }
 
 /// How a cell's text is aligned, which follows from what it is.

@@ -18,13 +18,32 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// What Topgent could establish about the binary behind a sensor.
+///
+/// This used to be a boolean dressed as three variants: `resolve` took the
+/// first candidate path for which `is_file()` returned true and `attest`
+/// reported `Trusted`, so the accepted locations — `/usr/local/bin` and
+/// `/opt/homebrew/bin` among them, which are owned by the logged-in user on
+/// most developer machines — proved only that *a* file existed at *a* string.
+/// The threat model says sensors resolve to operating-system-owned locations.
+/// The code did not check.
+///
+/// Trust is now a state rather than a verdict, and the uncomfortable answer is
+/// reported rather than rounded up: a Homebrew Docker client is `UserManaged`,
+/// because the account being monitored can replace it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolState {
-    /// Found at a path the operating system owns.
-    Trusted,
-    /// Present on this host, but only somewhere anything could have put it.
-    Untrusted,
-    /// Not found at any expected location.
+    /// Owned by the operating system and not writable by the monitored user,
+    /// along its whole resolved path.
+    SystemTrusted,
+    /// Present and usable, but replaceable by the account being watched —
+    /// either the file itself or a directory on the way to it.
+    UserManaged,
+    /// Found, but this platform has no ownership check in this build, so
+    /// nothing is claimed either way.
+    Unverified,
+    /// Found and refused: not a regular file, or its path could not be resolved.
+    Rejected,
+    /// Not found at any accepted location.
     Missing,
 }
 
@@ -33,10 +52,25 @@ impl ToolState {
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Trusted => "trusted",
-            Self::Untrusted => "untrusted",
+            Self::SystemTrusted => "system_trusted",
+            Self::UserManaged => "user_managed",
+            Self::Unverified => "unverified",
+            Self::Rejected => "rejected",
             Self::Missing => "missing",
         }
+    }
+
+    /// Whether the tool can be run at all.
+    ///
+    /// Trust decides how much its output is worth, not whether the sensor
+    /// exists. A refused or absent tool is not run; a `UserManaged` one is run
+    /// and its findings carry the state alongside them.
+    #[must_use]
+    pub const fn is_usable(self) -> bool {
+        matches!(
+            self,
+            Self::SystemTrusted | Self::UserManaged | Self::Unverified
+        )
     }
 }
 
@@ -61,33 +95,63 @@ pub struct SystemTool {
 }
 
 impl SystemTool {
-    /// The first accepted path that exists on this host.
+    /// The first accepted path that exists on this host, and what it is worth.
+    ///
+    /// Candidates are tried in order and the first usable one wins, so a client
+    /// installed in an operating-system location is preferred over the same
+    /// client in a user-writable one. A candidate that resolves to something
+    /// other than a regular file is refused rather than skipped quietly.
+    #[must_use]
+    pub fn resolve_checked(&self) -> (Option<PathBuf>, ToolState) {
+        let mut refused = false;
+        for candidate in self.candidates.iter().map(Path::new) {
+            if !candidate.exists() {
+                continue;
+            }
+            // The canonical path is what gets executed, so it is what gets
+            // judged: a symlink from an accepted location into a user-writable
+            // one is exactly the substitution being guarded against.
+            let Ok(real) = candidate.canonicalize() else {
+                refused = true;
+                continue;
+            };
+            if !real.is_file() {
+                refused = true;
+                continue;
+            }
+            let state = trust_of(&real);
+            if state.is_usable() {
+                return (Some(displayable(real)), state);
+            }
+            refused = true;
+        }
+        // Deliberately does not fall back to a `PATH` lookup. Reporting where
+        // an unaccepted copy lives would invite reading it, and the point is
+        // that it is not read.
+        (
+            None,
+            if refused {
+                ToolState::Rejected
+            } else {
+                ToolState::Missing
+            },
+        )
+    }
+
+    /// The first accepted path that can be run on this host.
     #[must_use]
     pub fn resolve(&self) -> Option<PathBuf> {
-        self.candidates
-            .iter()
-            .map(Path::new)
-            .find(|candidate| candidate.is_file())
-            .map(Path::to_path_buf)
+        self.resolve_checked().0
     }
 
     /// What Topgent can say about this tool right now.
     #[must_use]
     pub fn attest(&self) -> ToolAttestation {
-        match self.resolve() {
-            Some(path) => ToolAttestation {
-                name: self.name,
-                path: Some(path.to_string_lossy().into_owned()),
-                state: ToolState::Trusted,
-            },
-            // Deliberately does not fall back to a `PATH` lookup to fill this
-            // in. Reporting where an unaccepted copy lives would invite reading
-            // it, and the point is that it is not read.
-            None => ToolAttestation {
-                name: self.name,
-                path: None,
-                state: ToolState::Missing,
-            },
+        let (path, state) = self.resolve_checked();
+        ToolAttestation {
+            name: self.name,
+            path: path.map(|path| path.to_string_lossy().into_owned()),
+            state,
         }
     }
 
@@ -108,6 +172,84 @@ impl SystemTool {
         let mut command = Command::new(path);
         no_console_window(&mut command);
         Ok(command)
+    }
+}
+
+/// The canonical path, without the prefix Windows adds to it.
+///
+/// `canonicalize` on Windows returns the extended-length verbatim form,
+/// `\\?\C:\Windows\System32\NETSTAT.EXE`. It is the same path and it is what
+/// gets executed, but printing it in a report reads as something having gone
+/// wrong. Stripped only for the recorded path; the value actually run is the
+/// canonical one either way, because Windows resolves both to the same file.
+fn displayable(path: PathBuf) -> PathBuf {
+    #[cfg(windows)]
+    {
+        if let Some(rest) = path.to_string_lossy().strip_prefix(r"\\?\") {
+            return PathBuf::from(rest);
+        }
+    }
+    path
+}
+
+/// Whether the operating system owns this file and everything on the way to it.
+///
+/// A binary owned by the monitored account at mode 0755 is replaceable by that
+/// account, and so is one inside a directory the account can write, however
+/// well-protected the file itself is. Both are checked, because either alone is
+/// enough to substitute the sensor.
+///
+/// Mode bits are not a complete answer — they say nothing about a signature or
+/// about package provenance, so a *system-owned* binary is still only as
+/// trustworthy as whatever put it there. The state says what was checked, and
+/// nothing more.
+#[cfg(unix)]
+fn trust_of(path: &Path) -> ToolState {
+    use std::os::unix::fs::MetadataExt as _;
+
+    // Root, and on macOS the `wheel` and `admin` groups, own the locations a
+    // standard account cannot write. Anything else is the monitored user's.
+    let owned_by_system = |metadata: &std::fs::Metadata| {
+        let group_writable = metadata.mode() & 0o020 != 0;
+        let other_writable = metadata.mode() & 0o002 != 0;
+        metadata.uid() == 0 && !group_writable && !other_writable
+    };
+
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return ToolState::Rejected;
+    };
+    if !metadata.is_file() {
+        return ToolState::Rejected;
+    }
+    if !owned_by_system(&metadata) {
+        return ToolState::UserManaged;
+    }
+    // Every directory on the resolved path. `/opt/homebrew/bin` is owned by the
+    // logged-in user on a default install, so a root-owned binary sitting in it
+    // can still be moved aside and replaced.
+    let mut cursor = path.parent();
+    while let Some(directory) = cursor {
+        let Ok(metadata) = std::fs::metadata(directory) else {
+            return ToolState::Rejected;
+        };
+        if !owned_by_system(&metadata) {
+            return ToolState::UserManaged;
+        }
+        cursor = directory.parent();
+    }
+    ToolState::SystemTrusted
+}
+
+/// Windows has no mode bits, and the equivalent answer needs an access-control
+/// query this build does not make. Saying `Unverified` is the honest answer;
+/// saying `SystemTrusted` because the path starts with `C:\Windows` would be a
+/// claim about an access-control list nobody read.
+#[cfg(not(unix))]
+fn trust_of(path: &Path) -> ToolState {
+    if path.is_file() {
+        ToolState::Unverified
+    } else {
+        ToolState::Rejected
     }
 }
 
@@ -283,20 +425,120 @@ mod tests {
     }
 
     #[test]
-    fn a_tool_found_where_it_belongs_is_bound_to_that_exact_path() {
-        // Something every unix host has, used only to prove the binding.
+    fn a_tool_found_where_it_belongs_is_bound_to_a_real_path() {
+        // Something every host has, used only to prove the binding. The bound
+        // path is the canonical one, which on macOS resolves /bin/sh through
+        // no links and on some Linux distributions resolves it into /usr/bin.
         let present = SystemTool {
             name: "sh",
             candidates: &["/bin/sh", r"C:\Windows\System32\cmd.exe"],
         };
         let attestation = present.attest();
-        assert_eq!(attestation.state, ToolState::Trusted);
-        let path = attestation.path.expect("a trusted tool names its path");
         assert!(
-            present.candidates.contains(&path.as_str()),
-            "bound to a path nobody accepted: {path}"
+            attestation.state.is_usable(),
+            "the platform shell was refused: {:?}",
+            attestation.state
         );
+        #[cfg(unix)]
+        assert_eq!(
+            attestation.state,
+            ToolState::SystemTrusted,
+            "the platform shell is not owned by the operating system"
+        );
+        let path = attestation.path.expect("a resolved tool names its path");
+        assert!(std::path::Path::new(&path).is_absolute(), "{path}");
         assert!(present.command().is_ok());
+    }
+
+    /// The finding: `resolve` took the first candidate for which `is_file()`
+    /// was true and `attest` called it trusted. `/usr/local/bin` and
+    /// `/opt/homebrew/bin` are accepted locations and are owned by the logged-in
+    /// user on most developer machines, so the monitored account could replace
+    /// the binary whose output Topgent reports as operating-system truth.
+    #[cfg(unix)]
+    #[test]
+    fn a_binary_the_watched_account_can_replace_is_not_system_trusted() {
+        use std::io::Write as _;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        // nosemgrep: rust.lang.security.temp-dir.temp-dir - test fixture, per-process and per-thread name, not a trust boundary
+        let dir = std::env::temp_dir().join(format!("topgent-tool-trust-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("a scratch directory");
+        let planted = dir.join("sensor");
+        let mut file = std::fs::File::create(&planted).expect("a scratch file");
+        file.write_all(b"#!/bin/sh\nexit 0\n").expect("write");
+        drop(file);
+        std::fs::set_permissions(&planted, std::fs::Permissions::from_mode(0o755))
+            .expect("mode 0755");
+
+        let leaked = Box::leak(planted.to_string_lossy().into_owned().into_boxed_str());
+        let tool = SystemTool {
+            name: "planted",
+            candidates: std::slice::from_ref(Box::leak(Box::new(&*leaked))),
+        };
+        let attestation = tool.attest();
+        assert_eq!(
+            attestation.state,
+            ToolState::UserManaged,
+            "a binary at 0755 owned by the current user was called trusted"
+        );
+        // Still usable: trust decides what the output is worth, not whether the
+        // sensor runs at all.
+        assert!(attestation.state.is_usable());
+        assert!(tool.command().is_ok());
+
+        // A directory Topgent will not follow to a file is refused, not skipped.
+        let missing = SystemTool {
+            name: "gone",
+            candidates: &["/topgent/definitely/not/here"],
+        };
+        assert_eq!(missing.attest().state, ToolState::Missing);
+
+        // A path that is not a regular file is refused rather than run.
+        let directory = SystemTool {
+            name: "a-directory",
+            candidates: &["/tmp"],
+        };
+        assert_eq!(directory.attest().state, ToolState::Rejected);
+        assert!(directory.command().is_err());
+
+        std::fs::remove_dir_all(&dir).expect("clean up");
+    }
+
+    /// `canonicalize` on Windows returns the extended-length verbatim form, and
+    /// a sensor path printed as `\\?\C:\Windows\System32\NETSTAT.EXE` reads as
+    /// something having gone wrong. Seen in a live report from the lab host.
+    #[test]
+    fn a_reported_path_carries_no_verbatim_prefix() {
+        for attestation in attestations() {
+            let Some(path) = attestation.path else {
+                continue;
+            };
+            assert!(
+                !path.starts_with(r"\\?\"),
+                "{} is reported as {path}",
+                attestation.name
+            );
+            assert!(
+                std::path::Path::new(&path).is_absolute(),
+                "{} lost its root: {path}",
+                attestation.name
+            );
+        }
+    }
+
+    #[test]
+    fn every_state_has_a_stable_label_and_says_whether_it_runs() {
+        for (state, label, usable) in [
+            (ToolState::SystemTrusted, "system_trusted", true),
+            (ToolState::UserManaged, "user_managed", true),
+            (ToolState::Unverified, "unverified", true),
+            (ToolState::Rejected, "rejected", false),
+            (ToolState::Missing, "missing", false),
+        ] {
+            assert_eq!(state.as_str(), label);
+            assert_eq!(state.is_usable(), usable, "{label}");
+        }
     }
 
     #[test]

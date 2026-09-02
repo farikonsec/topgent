@@ -86,7 +86,7 @@ fn persisted_activity(
 #[allow(clippy::too_many_lines)]
 pub fn scan() -> Value {
     let generated_at = now_ms();
-    let policy = Policy::load();
+    let (policy, policy_health) = Policy::load_checked(&Policy::path());
     let collectors = report_collectors(&policy);
     let result = sweep(&collectors, &SystemClock);
     let scored = analyse_with(&result.facts, &policy);
@@ -148,6 +148,16 @@ pub fn scan() -> Value {
             "detail": topgent_collect::intercept::probe().detail(),
         },
         "coverage": detection_coverage(&result.runs),
+        // Which rules are actually in force. A policy that broke and fell back
+        // to built-in defaults used to look identical to a fresh install, so
+        // every finding on the host silently changed meaning.
+        "policy_health": {
+            "state": policy_health.as_str(),
+            "detail": policy_health.detail(),
+            "digest": policy_health.digest(),
+            "operator_rules_in_force": policy_health.rules_are_the_operators(),
+            "path": Policy::path().to_string_lossy(),
+        },
         "response": response_json(&inventory_agents, &policy, &journal, generated_at),
         "context": context_json(policy.semantic.enabled, &journal, &inventory_agents, generated_at),
         "agents": scored.iter().map(|agent| agent_json(agent, &policy, generated_at)).collect::<Vec<_>>(),

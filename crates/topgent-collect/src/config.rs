@@ -312,6 +312,19 @@ impl Collector for ConfigCollector {
         ID
     }
 
+    /// Configuration is attributed only to processes this account owns, and a
+    /// process whose owner the platform will not state is not attributed at
+    /// all. Both cases leave a recognised agent in the inventory with no
+    /// declared permissions, which reads as "not examined" rather than "nothing
+    /// granted" only if the boundary is stated.
+    fn boundary(&self) -> Option<&'static str> {
+        Some(
+            "Configuration is attributed only to agent processes owned by the invoking account; \
+             an agent running as another user, or one whose owner the platform will not state, is \
+             listed without its declared permissions.",
+        )
+    }
+
     fn collect(&self, clock: &dyn Clock) -> Result<Vec<Fact>, CollectError> {
         let Some(home) = self.home.clone().or_else(home) else {
             return Err(CollectError::Unavailable {
@@ -320,15 +333,26 @@ impl Collector for ConfigCollector {
         };
 
         // Config is per family, and it attaches to every live process of that
-        // family: two Claude Code sessions share one settings.json.
-        let by_family: BTreeMap<&'static str, Vec<(u32, UnixMillis)>> = crate::process::snapshot()
+        // family *belonging to this account*: two Claude Code sessions share one
+        // settings.json, but another user's Claude reads their own. The process
+        // table lists everything the user can see, so without the owner filter
+        // this account's declared permissions, model and grants were attached to
+        // a stranger's process and scored as theirs.
+        let me = crate::process::current_owner();
+        let candidates: Vec<_> = crate::process::snapshot()
             .into_iter()
-            .fold(BTreeMap::new(), |mut acc, p| {
-                if let Some(f) = p.family {
-                    acc.entry(f).or_default().push((p.pid, p.started_at));
-                }
-                acc
-            });
+            .filter(|p| p.family.is_some())
+            .collect();
+        let by_family: BTreeMap<&'static str, Vec<(u32, UnixMillis)>> = crate::process::owned_by(
+            candidates, &me,
+        )
+        .into_iter()
+        .fold(BTreeMap::new(), |mut acc, p| {
+            if let Some(f) = p.family {
+                acc.entry(f).or_default().push((p.pid, p.started_at));
+            }
+            acc
+        });
 
         let mut facts = Vec::new();
         for (family, procs) in &by_family {

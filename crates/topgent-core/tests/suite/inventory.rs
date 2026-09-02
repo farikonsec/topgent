@@ -98,6 +98,7 @@ fn shared_host_extensions_are_distinct_policy_assets_with_honest_relationships()
         started_at: crate::fixtures::at(100),
     };
     let facts = vec![
+        crate::fixtures::host_process(subject.clone()),
         crate::fixtures::fact(
             subject.clone(),
             Claim::EditorExtensionActive {

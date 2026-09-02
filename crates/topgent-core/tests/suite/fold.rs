@@ -48,13 +48,27 @@ fn multiple_agent_extensions_share_one_real_host_without_claiming_its_family() {
         pid: 42,
         started_at: at(100),
     };
-    let mut facts = vec![fixtures::fact(
-        subject.clone(),
-        Claim::EditorExtensionActive {
-            family: "roo-code".to_owned(),
-            extension_id: "rooveterinaryinc.roo-cline".to_owned(),
-        },
-    )];
+    // The editor collector emits both, and the fold anchors on both: a host
+    // process with no verified extension is not an agent, and an extension
+    // claim with no process behind it has no owner or executable evidence.
+    let mut facts = vec![
+        fixtures::fact(
+            subject.clone(),
+            Claim::ProcessSeen {
+                exe: "/Applications/Visual Studio Code.app/Contents/MacOS/Electron".to_owned(),
+                exe_path_known: true,
+                uid: 501,
+                user: "testuser".to_owned(),
+            },
+        ),
+        fixtures::fact(
+            subject.clone(),
+            Claim::EditorExtensionActive {
+                family: "roo-code".to_owned(),
+                extension_id: "rooveterinaryinc.roo-cline".to_owned(),
+            },
+        ),
+    ];
     facts.push(fixtures::fact(
         subject,
         Claim::EditorExtensionActive {
@@ -148,6 +162,138 @@ fn a_fact_that_names_no_process_is_reported_rather_than_dropped() {
     assert_eq!(g.rejected[1].claim_kind, "file_touched");
 }
 
+/// The finding: the filesystem, network-event and DNS collectors build their
+/// pid maps from every visible process and emit process-subject facts without
+/// requiring the subject to be a recognised agent, and the fold built an
+/// `Agent` for any of them. With audit sensors live, an unrelated shell that
+/// opened a watched file arrived in the inventory with a risk score.
+#[test]
+fn a_process_nothing_recognised_is_not_an_agent_however_much_it_did() {
+    let facts = Stream::new(9001)
+        .seen_unrecognised("/bin/bash", 501, "testuser")
+        .touched("~/.ssh/id_ed25519", Access::Read)
+        .socket("198.51.100.20", 443, Direction::Outbound)
+        .build();
+
+    let g = fold(&facts);
+    assert!(g.agents.is_empty(), "a shell was scored as an agent");
+
+    // Kept rather than dropped, so an attribution defect stays findable.
+    assert_eq!(g.rejected.len(), facts.len());
+    assert!(
+        g.rejected
+            .iter()
+            .all(|r| r.reason == RejectReason::UnanchoredIdentity)
+    );
+    assert!(
+        g.rejected
+            .iter()
+            .all(|r| r.subject.map(|id| id.pid) == Some(9001)),
+        "the refused facts do not say what they were about"
+    );
+}
+
+/// Neither half of the anchor is enough alone, and the order they arrive in
+/// cannot matter.
+#[test]
+fn an_agent_needs_both_a_process_and_something_that_says_what_it_is() {
+    // A family claim with no process behind it: no executable, no owner.
+    assert!(
+        fold(&Stream::new(1).family("claude-code").build())
+            .agents
+            .is_empty()
+    );
+    // A process with nothing saying what it is.
+    assert!(
+        fold(
+            &Stream::new(2)
+                .seen_unrecognised("/bin/bash", 501, "testuser")
+                .build()
+        )
+        .agents
+        .is_empty()
+    );
+    // Both, in either order.
+    let mut both = Stream::new(3)
+        .seen_unrecognised("/usr/local/bin/claude", 501, "testuser")
+        .family("claude-code")
+        .build();
+    assert_eq!(fold(&both).agents.len(), 1);
+    both.reverse();
+    assert_eq!(fold(&both).agents.len(), 1, "anchoring is order-dependent");
+}
+
+/// An editor host is an agent because a verified extension is active inside it,
+/// not because the host process exists. Both facts are needed, in either order.
+#[test]
+fn an_editor_host_is_anchored_by_its_extension_and_not_by_being_a_process() {
+    let subject = Subject::Process {
+        pid: 42,
+        started_at: at(100),
+    };
+    assert!(
+        fold(&[fixtures::host_process(subject.clone())])
+            .agents
+            .is_empty(),
+        "every editor window would be an agent"
+    );
+
+    let mut both = vec![
+        fixtures::host_process(subject.clone()),
+        fixtures::fact(
+            subject,
+            Claim::EditorExtensionActive {
+                family: "cline".to_owned(),
+                extension_id: "saoudrizwan.claude-dev".to_owned(),
+            },
+        ),
+    ];
+    assert_eq!(fold(&both).agents.len(), 1);
+    both.reverse();
+    assert_eq!(fold(&both).agents.len(), 1);
+}
+
+/// A descendant is not an agent, however much it did. Anchoring descendants as
+/// well put a blank inventory row behind every helper an agent had spawned —
+/// nineteen of them on one lab host — while the activity timeline was already
+/// attributing their facts to the agent that spawned them, from the fact stream
+/// rather than from the inventory.
+#[test]
+fn a_descendant_is_attributed_to_its_agent_rather_than_becoming_one() {
+    let mut facts = Stream::new(10)
+        .seen("/opt/codex", 501, "testuser")
+        .family("codex-cli")
+        .child(11, "curl", 1)
+        .build();
+    facts.extend(
+        Stream::new(11)
+            .seen_unrecognised("/usr/bin/curl", 501, "testuser")
+            .touched("~/.ssh/id_ed25519", Access::Read)
+            .build(),
+    );
+
+    let graph = fold(&facts);
+    let pids: Vec<u32> = graph.agents.iter().map(|a| a.id.pid).collect();
+    assert_eq!(pids, vec![10], "a helper process became an agent");
+    assert!(
+        graph
+            .rejected
+            .iter()
+            .any(|r| r.subject.map(|id| id.pid) == Some(11)),
+        "the helper's facts vanished instead of being kept as refused"
+    );
+
+    // The activity timeline still shows what the helper did, under the agent
+    // that spawned it.
+    let activity = topgent_core::build_activity(&facts, &graph.agents);
+    let touched = activity
+        .events
+        .iter()
+        .find(|event| event.actor_pid == 11)
+        .expect("the descendant's file access is still reported");
+    assert_eq!(touched.agent_pid, 10, "attributed to the wrong agent");
+}
+
 #[test]
 fn the_three_columns_are_filled_from_three_different_kinds_of_fact() {
     let facts = Stream::new(1)
@@ -201,6 +347,61 @@ fn an_untouched_credential_in_reach_is_still_a_finding() {
     assert!(secrets[0].sensitive);
     assert_eq!(secrets[0].observed, Tri::No);
     assert_eq!(secrets[0].reachable, Tri::Yes);
+}
+
+/// The finding, at the fold: a probe that only established the path resolves
+/// must not close the reachable column. `SECRET_REACHABLE` is fifteen points
+/// and `EXFILTRATION_PATH` twelve, and both used to fire on a successful stat.
+#[test]
+fn a_path_that_merely_resolves_does_not_become_a_reachable_secret() {
+    let facts = Stream::new(1)
+        .seen("/bin/agent", 501, "testuser")
+        .declares("~/work", Access::Write, true)
+        .reachable_by(
+            "~/.ssh/id_ed25519",
+            Access::Read,
+            true,
+            topgent_facts::Reachability::PathResolves,
+        )
+        .build();
+
+    let g = fold(&facts);
+    let r = &g.agents[0].resources[0];
+
+    assert_eq!(
+        r.reachable,
+        Tri::Unknown,
+        "traversal was reported as readability"
+    );
+    assert!(
+        g.agents[0].latent_secrets().is_empty(),
+        "a credential nobody showed was readable was scored as one"
+    );
+    // The resource is still in the report, and it says what was established.
+    assert_eq!(
+        r.reach_evidence,
+        Some(topgent_facts::Reachability::PathResolves)
+    );
+    assert!(r.sensitive, "it is still known to be a credential");
+}
+
+/// Two probes, one path. The kernel's answer outranks traversal whichever
+/// arrives first, because the fold is order-independent by construction.
+#[test]
+fn the_stronger_reachability_evidence_wins_in_either_order() {
+    let weak = topgent_facts::Reachability::PathResolves;
+    let strong = topgent_facts::Reachability::AccountReadable;
+    for (first, second) in [(weak, strong), (strong, weak)] {
+        let facts = Stream::new(1)
+            .seen("/bin/agent", 501, "testuser")
+            .reachable_by("~/.aws/credentials", Access::Read, true, first)
+            .reachable_by("~/.aws/credentials", Access::Read, true, second)
+            .build();
+        let g = fold(&facts);
+        let r = &g.agents[0].resources[0];
+        assert_eq!(r.reach_evidence, Some(strong), "{first:?} then {second:?}");
+        assert_eq!(r.reachable, Tri::Yes);
+    }
 }
 
 #[test]
@@ -368,9 +569,19 @@ fn identity_is_delegated_when_permissions_come_from_a_persons_config() {
     let service = fold(&Stream::new(2).seen("/bin/ollama", 501, "testuser").build());
     assert_eq!(service.agents[0].identity, IdentityKind::ServiceAccount);
 
-    // No process fact at all, so no owner was ever established.
-    let unknown = fold(&Stream::new(3).family("mystery").build());
+    // The operating system named no owner, which the fact contract carries as
+    // uid zero. Previously this fixture had no process fact at all; the fold
+    // now refuses to build an agent out of a family claim alone, because that
+    // claim carries none of the executable and owner evidence a detection
+    // normally comes with.
+    let unknown = fold(
+        &Stream::new(3)
+            .seen_unrecognised("/bin/mystery", 0, "unknown")
+            .family("mystery")
+            .build(),
+    );
     assert_eq!(unknown.agents[0].identity, IdentityKind::Unknown);
+    assert_eq!(unknown.agents[0].uid, None);
 }
 
 #[test]
@@ -466,6 +677,7 @@ fn an_agent_built_from_nothing_but_a_guess_says_so() {
     let g = fold(
         &Stream::new(1)
             .confidence(topgent_facts::Confidence::Possible)
+            .seen_unrecognised("/usr/bin/python3", 0, "unknown")
             .family("unclassified")
             .build(),
     );
@@ -473,8 +685,7 @@ fn an_agent_built_from_nothing_but_a_guess_says_so() {
         g.agents[0].discovery_confidence,
         topgent_facts::Confidence::Possible
     );
-    assert_eq!(g.agents[0].uid, None);
-    assert!(g.agents[0].exe.is_none());
+    assert_eq!(g.agents[0].uid, None, "no owner was established");
     assert_eq!(g.agents[0].identity, IdentityKind::Unknown);
 }
 

@@ -62,6 +62,46 @@ pub struct Report {
     pub response: Response,
     /// Optional agent-supplied session context.
     pub context: Context,
+    /// The binaries the sensors run, and what can be said about each.
+    pub tools: Vec<Tool>,
+    /// Whether the rules in force are the configured ones.
+    pub policy_health: PolicyHealth,
+}
+
+/// One sensor binary, and how far it can be trusted.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Tool {
+    /// Short name.
+    #[serde(deserialize_with = "nullable")]
+    pub name: String,
+    /// `system_trusted`, `user_managed`, `unverified`, `rejected` or `missing`.
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
+    /// The absolute path accepted, when one was.
+    #[serde(deserialize_with = "nullable")]
+    pub path: String,
+}
+
+/// Which rules produced this report.
+///
+/// A policy that broke and fell back to built-in defaults used to look exactly
+/// like a fresh install, so every finding on the host quietly changed meaning.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct PolicyHealth {
+    /// `absent`, `valid`, `recovered` or `malformed`.
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
+    /// What went wrong, where something did.
+    #[serde(deserialize_with = "nullable")]
+    pub detail: String,
+    /// Whether the rules in force are the ones the operator wrote.
+    #[serde(deserialize_with = "nullable")]
+    pub operator_rules_in_force: bool,
+    /// Where the policy is read from.
+    #[serde(deserialize_with = "nullable")]
+    pub path: String,
 }
 
 /// One agent.
@@ -142,6 +182,15 @@ pub struct Resource {
     /// What could be opened now.
     #[serde(deserialize_with = "nullable")]
     pub reachable: String,
+    /// What the reachability probe established, when one ran.
+    ///
+    /// `account_readable` where the kernel answered, `path_resolves` where only
+    /// the path could be established. Empty where nothing probed the path.
+    #[serde(deserialize_with = "nullable")]
+    pub reachable_evidence: String,
+    /// The same, in the words a reader needs.
+    #[serde(deserialize_with = "nullable")]
+    pub reachable_statement: String,
     /// Whether the path holds a credential.
     #[serde(deserialize_with = "nullable")]
     pub latent_secret: bool,

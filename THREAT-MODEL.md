@@ -45,13 +45,17 @@ Topgent stores no credentials, no prompts, no file contents, and no packet paylo
 
 **Mitigation, partial.** Modification of Topgent's own configuration by an agent raises `SELF_TAMPERING`. The paths that trigger it are recognised in Rust, not in data, so a data file cannot remove them.
 
+A policy that cannot be read is not silently replaced by defaults. Four states are reported: absent, valid with a SHA-256 digest of the bytes loaded, recovered from a last-known-good copy, and malformed with nothing behind it. Only the last withholds the operator's rules, and it fails the CI gate closed. Writes replace the file atomically, so a crash or a second writer cannot leave half a policy.
+
 **Residual risk.** An agent that stops Topgent before modifying the file leaves no finding. Topgent is not a tamper-proof agent and does not claim to be.
 
 ### T3. An agent substitutes a sensor binary on `PATH`
 
-**Mitigation.** Sensor tools are resolved to an absolute path in an operating-system-owned location. A tool found only on `PATH` is refused rather than executed. Attestations are journaled with first-seen, last-seen, and change time.
+**Mitigation.** Sensor tools are resolved to an absolute path in an operating-system-owned location. A tool found only on `PATH` is refused rather than executed. The resolved path is canonicalised, and the file and every directory above it are checked for owner and writability, so a symlink from an accepted location into a user-writable one is refused. Attestations are journaled with first-seen, last-seen, and change time.
 
-**Residual risk.** Collectors that shell out remain the largest attack surface in the product. Replacing them with library calls is tracked work.
+Trust is reported as a state rather than a verdict: `system_trusted`, `user_managed`, `unverified`, `rejected`, `missing`. A Homebrew Docker client is `user_managed`, because the account being watched can replace it.
+
+**Residual risk.** Ownership and writability are not a signature. Package provenance and code signing are not checked. On Windows there is no `AccessCheck` in this build, so every present binary reports `unverified` rather than a trust level nobody established. Collectors that shell out remain the largest attack surface in the product; replacing them with library calls is tracked work.
 
 ### T4. PID reuse causes activity to be attributed to the wrong process
 
@@ -79,8 +83,22 @@ Topgent stores no credentials, no prompts, no file contents, and no packet paylo
 
 **Residual risk.** Binaries are **not code-signed**. Verification depends on the user checking `SHA256SUMS`. Signing is tracked in the roadmap.
 
+### T9. A reachability finding claims more than was established
+
+**Mitigation.** Reachability asks the kernel through `faccessat` with `AT_EACCESS`, so access-control lists are included and a file that stats but cannot be opened is not reported. Every reachable resource carries the evidence behind it: `account_readable` where the kernel answered, `path_resolves` where only the path could be established. The file is never opened.
+
+**Residual risk.** The answer is about the **account**, not the process. Two processes under one owner can differ in supplementary groups, capabilities, namespaces, mandatory access control, seccomp, a macOS sandbox profile, a container filesystem view or a chroot. Topgent scores `SANDBOX_ESCAPE` and therefore does not pretend otherwise: process confinement is not evaluated. On Windows there is no `AccessCheck` in this build, so reachability degrades to `path_resolves` and never claims readability. Resolving the pathname can itself touch a remote or automounted path.
+
+### T10. An unrelated process is reported as an agent
+
+**Mitigation.** The filesystem, network-event and DNS collectors build their maps from every visible process, so being seen doing something is not enough. An identity becomes an agent only with a process observation plus either a recognised family or a verified active editor extension. Everything else is retained as refused, with the identity it was about, so an attribution defect stays findable.
+
+**Residual risk.** A binary installed at a path the catalogue knows is recognised on that evidence. Detection is executable provenance, not code identity.
+
 ## 5. Non-goals
 
 Topgent does not prevent action, decrypt traffic, read content, run privileged, or defend against an attacker who already holds root. It reports what an unprivileged process can observe, and states when it cannot observe something.
 
-A sensor that cannot work reports `unsupported`, `permission_required`, or `degraded`. A green row never indicates coverage the platform did not provide.
+A sensor that cannot work reports `unsupported`, `permission_required`, or `degraded`. A green row never indicates coverage the platform did not provide, and the CI gate validates the whole rule catalogue rather than whatever coverage a report happens to carry.
+
+Configuration is attributed only to agent processes owned by the invoking account. An agent running as another user, or one whose owner the platform will not state, is listed without its declared permissions rather than borrowing someone else's.

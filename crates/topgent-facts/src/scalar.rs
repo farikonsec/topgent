@@ -191,3 +191,63 @@ impl Protocol {
         !matches!(self, Self::Icmp)
     }
 }
+
+/// What a reachability probe actually established.
+///
+/// The distinction the reachable column rested on and did not make. Topgent
+/// reported `ResourceReachable` with `Access::Read` and `Confidence::Certain`
+/// whenever `std::fs::metadata` succeeded, and stat needs the execute bit on
+/// the parent directory and nothing at all on the file. A mode-000 credential
+/// stats perfectly and cannot be opened, so every `SECRET_REACHABLE`, every
+/// `EXFILTRATION_PATH`, and the phrase "readable by this process owner" were
+/// standing on a traversal check.
+///
+/// One further limit is deliberately *not* claimed away by either variant. A
+/// readability answer is for an **account**, not for a process: two processes
+/// with one owner can differ in supplementary groups, capabilities, namespaces,
+/// mandatory access control, seccomp, a macOS sandbox profile, a container
+/// filesystem view or a chroot. Topgent knows this — it parses `sandbox_mode`,
+/// exposes `is_sandboxed()` and scores `SANDBOX_ESCAPE` at a hundred points —
+/// so process confinement stays unevaluated rather than being assumed away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Reachability {
+    /// The kernel was asked whether the invoking account may read the path,
+    /// with the real rather than the effective identity, and said yes. Access
+    /// control lists are included, because the kernel is the thing answering.
+    AccountReadable,
+    /// The path resolves and its directory chain is traversable. Whether it can
+    /// be opened was not established, because this platform has no equivalent
+    /// probe in this build.
+    PathResolves,
+}
+
+impl Reachability {
+    /// Stable report label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::AccountReadable => "account_readable",
+            Self::PathResolves => "path_resolves",
+        }
+    }
+
+    /// What was proved, in the words a report should use.
+    #[must_use]
+    pub const fn statement(self) -> &'static str {
+        match self {
+            Self::AccountReadable => {
+                "readable by the agent's account; process confinement not evaluated"
+            }
+            Self::PathResolves => "the path exists and is traversable; readability not established",
+        }
+    }
+
+    /// Whether this evidence supports saying the resource can be read.
+    ///
+    /// Only the kernel's own answer does. Traversal does not, which is the
+    /// whole finding.
+    #[must_use]
+    pub const fn establishes_readability(self) -> bool {
+        matches!(self, Self::AccountReadable)
+    }
+}

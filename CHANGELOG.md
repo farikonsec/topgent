@@ -4,6 +4,34 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-02
+
+Six gaps between what Topgent stated and what it had proved, from an external
+assessment of 0.2.1. Five of the six remove a claim rather than add a capability:
+the tool now knows less and says so accurately.
+
+### Changed
+
+- **Reachability asks the kernel instead of calling `stat`.** `stat` needs the execute bit on the parent directory and nothing on the file, so a mode-000 credential stated fine and could not be opened. `faccessat` with `AT_EACCESS` answers the real question, access-control lists included, and the file is still never opened. Every reachable resource now carries its evidence: `account_readable` where the kernel answered, `path_resolves` where only the path could be established. The answer is about the account, not the process, and the wording says so.
+- **Windows reachability degrades rather than overclaiming.** There is no `AccessCheck` in this build, so a reachable path there means the path resolves. A real implementation upgrades it later instead of restoring it.
+- **An agent needs a process observation plus a recognised family or a verified editor extension.** With audit sensors live, an unrelated shell that opened a watched file arrived in the inventory with a risk score of its own. On a lab host the inventory went from twenty rows to one. Refused facts are retained with the identity they were about.
+- **Configuration is attributed only to processes this account owns.** Another user's Claude was reported with this user's declared permissions, model and grants. Ownership is compared as a typed value, uid on Unix and SID on Windows, resolved rather than assumed.
+- **Sensor trust is a reported state, not a boolean.** A binary was trusted because a file existed at an accepted path, and `/usr/local/bin` and `/opt/homebrew/bin` are user-owned on most developer machines. The resolved path is canonicalised and the file and every parent are checked for owner and writability. A Homebrew Docker client reports `user_managed`.
+- **Policy health is reported.** Absent, valid with a digest, recovered from a last-known-good copy, or malformed. Writes replace the file atomically. Nothing overwrites a policy it could not read.
+
+### Fixed
+
+- **An empty coverage array passed `--require-coverage`.** `all()` on an empty array is true, so a truncated or crafted report opened the CI gate. The exact rule catalogue is validated: every rule once, no unknowns, valid state and verification. A malformed table is an input error rather than incomplete coverage.
+- **A JSON array parsed as a policy with every weight at zero.** Serde fills a struct from a sequence positionally, so `[[0]]` scored every agent on the host at zero, silently. Found by the `config` fuzz target.
+- **The journal lost records under concurrent writes.** Every writer named its scratch file by process id alone, so two writers inside one process collided and one lost. Read-modify-write now runs under an exclusive lock.
+- **Reachability was empty on Windows after the ownership change.** The sweep leaves the owner unstated there because a security identifier costs a query per process, and an unstated owner matches nothing. Ownership is resolved before it is compared.
+- **A sensor path was reported with the Windows extended-length prefix.**
+
+### Interface
+
+- The reachable column says `path only` where readability was not established.
+- The health panel names the policy file when the rules in force are not the operator's, and lists the binaries the sensors run with the trust state of each.
+
 ## [0.2.2] - 2026-09-02
 
 ### Fixed

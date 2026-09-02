@@ -119,6 +119,13 @@ pub(crate) fn agent_json((a, r): &(Agent, Risk), policy: &Policy, generated_at: 
             "declared": res.declared.label(),
             "observed": res.observed.label(),
             "reachable": res.reachable.label(),
+            // What the reachability probe actually established, and the
+            // sentence a reader should get. "Reachable: unknown" alone reads as
+            // "nobody looked"; this says whether the path resolved, and states
+            // that readability is an answer about the account rather than about
+            // the process.
+            "reachable_evidence": res.reach_evidence.map(topgent_facts::Reachability::as_str),
+            "reachable_statement": res.reach_evidence.map(topgent_facts::Reachability::statement),
             "sensitive": res.sensitive,
             "drift": res.is_drift(),
             "latent_secret": res.is_latent_secret(),

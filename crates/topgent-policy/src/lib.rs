@@ -28,8 +28,11 @@
 #![deny(missing_docs)]
 
 pub mod catalogue;
+pub mod health;
 pub mod locations;
 pub mod signals;
+
+pub use health::PolicyHealth;
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -380,23 +383,118 @@ impl Policy {
             .join("policy.json")
     }
 
+    /// The last-known-good copy kept beside the policy.
+    ///
+    /// Written by [`Policy::save_to`] after a successful replace, so a crash
+    /// mid-write leaves the previous rules recoverable rather than gone.
+    #[must_use]
+    pub fn backup_path(path: &std::path::Path) -> PathBuf {
+        let mut backup = path.as_os_str().to_owned();
+        backup.push(".last-known-good");
+        PathBuf::from(backup)
+    }
+
     /// Load the policy, falling back to defaults for anything missing or absent.
     ///
-    /// A malformed file never crashes Topgent: it is treated as absent and the
-    /// defaults apply, because a security tool that will not start because one
-    /// config key was mistyped is worse than one that ignores the typo.
+    /// A malformed file never crashes Topgent, but it is no longer silent
+    /// either: see [`Policy::load_checked`] for what actually happened.
     #[must_use]
     pub fn load() -> Self {
         Self::load_from(&Self::path())
     }
 
     /// Load from a specific file, defaulting on absence or a parse error.
+    ///
+    /// Kept for the many callers that only want the rules. Anything that
+    /// reports, enforces, or gates on the policy uses [`Policy::load_checked`],
+    /// because those callers must be able to tell defaults-by-choice from
+    /// defaults-because-the-file-broke.
     #[must_use]
     pub fn load_from(path: &std::path::Path) -> Self {
-        std::fs::read_to_string(path)
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or_default()
+        Self::load_checked(path).0
+    }
+
+    /// Load, and say which of the four states the policy is in.
+    ///
+    /// The order matters. A file that is absent is not a fault. A file that is
+    /// present and unreadable falls back to the last-known-good copy, and only
+    /// a file that is broken with no copy behind it withholds the operator's
+    /// rules — which is the one case enforcement and CI must fail closed on.
+    #[must_use]
+    pub fn load_checked(path: &std::path::Path) -> (Self, crate::PolicyHealth) {
+        use crate::PolicyHealth;
+
+        let text = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return (Self::default(), PolicyHealth::Absent);
+            }
+            Err(error) => {
+                return Self::recover(
+                    path,
+                    format!("{} could not be read: {error}", path.display()),
+                );
+            }
+        };
+
+        match Self::parse(&text) {
+            Ok(policy) => (
+                policy,
+                PolicyHealth::Valid {
+                    digest: crate::health::digest_of(&text),
+                },
+            ),
+            Err(detail) => Self::recover(path, detail),
+        }
+    }
+
+    /// Parse policy bytes, refusing anything a reader would have to guess at.
+    ///
+    /// Public because it is the only untrusted-input boundary of this crate: a
+    /// person edits the file by hand, and anything running as the user can
+    /// write it. The fuzz harness drives it directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns what was wrong with the bytes, in the words the report uses.
+    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|error| format!("the policy is not valid UTF-8: {error}"))?;
+        // The byte-order mark PowerShell's redirection writes is not part of
+        // the document, and refusing a file over it refuses the user's own
+        // tooling rather than anything wrong with their policy.
+        let text = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let document: serde_json::Value = serde_json::from_str(text)
+            .map_err(|error| format!("the policy is not valid JSON: {error}"))?;
+        // Serde will deserialise a struct out of a JSON *array*, filling fields
+        // positionally. Found by the `config` fuzz target: `[[0]]` parsed
+        // cleanly into a policy whose every weight was zero, which scores every
+        // agent on the host at zero — a worse outcome than the defaults, and
+        // silent. A policy is an object.
+        if !document.is_object() {
+            return Err("the policy is not a JSON object".to_owned());
+        }
+        serde_json::from_value(document)
+            .map_err(|error| format!("the policy is not valid JSON: {error}"))
+    }
+
+    /// Fall back to the last-known-good copy, or to built-in defaults.
+    fn recover(path: &std::path::Path, detail: String) -> (Self, crate::PolicyHealth) {
+        use crate::PolicyHealth;
+
+        let backup = Self::backup_path(path);
+        if let Ok(bytes) = std::fs::read(&backup)
+            && let Ok(policy) = Self::parse(&bytes)
+        {
+            return (
+                policy,
+                PolicyHealth::Recovered {
+                    detail,
+                    digest: crate::health::digest_of(&bytes),
+                },
+            );
+        }
+        (Self::default(), PolicyHealth::Malformed { detail })
     }
 
     /// Write the policy back to its file.
@@ -410,14 +508,58 @@ impl Policy {
 
     /// Write to a specific file, creating parent directories.
     ///
+    /// A bare `fs::write` truncates first and writes second, so a crash, a full
+    /// disk or a second writer between the two leaves a half-file that parses
+    /// as nothing. This writes a fresh temporary file in the same directory,
+    /// flushes it to the platter, renames it over the target, and only then
+    /// refreshes the last-known-good copy — so at every instant the reader
+    /// either sees the old policy or the new one, and never half of either.
+    ///
     /// # Errors
     ///
     /// Returns the underlying I/O error.
     pub fn save_to(&self, path: &std::path::Path) -> std::io::Result<()> {
-        if let Some(dir) = path.parent() {
+        use std::io::Write as _;
+
+        if let Some(dir) = path.parent()
+            && !dir.as_os_str().is_empty()
+        {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, serde_json::to_string_pretty(self).unwrap_or_default())
+        let body = serde_json::to_string_pretty(self)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+
+        // Named for this process and this attempt rather than a fixed suffix,
+        // so two writers do not land on one another's temporary file.
+        let scratch = Self::backup_path(path).with_extension(format!(
+            "tmp-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |since| since.as_nanos())
+        ));
+        let outcome = (|| -> std::io::Result<()> {
+            let mut file = std::fs::File::create(&scratch)?;
+            restrict(&file)?;
+            file.write_all(body.as_bytes())?;
+            file.flush()?;
+            file.sync_all()?;
+            drop(file);
+            // Rename over an existing file is atomic on Unix and replaces on
+            // Windows through the same call in the standard library, which is
+            // why replacement is asserted on every platform in the suite.
+            std::fs::rename(&scratch, path)
+        })();
+        if outcome.is_err() {
+            let _ = std::fs::remove_file(&scratch);
+            return outcome;
+        }
+
+        // Best effort, and deliberately after the replace: a policy that saved
+        // but whose backup could not be refreshed is still a saved policy, and
+        // failing the write would be the wrong answer.
+        let _ = std::fs::write(Self::backup_path(path), &body);
+        Ok(())
     }
 
     /// Add a watchlist rule, replacing any identical path+condition.
@@ -470,4 +612,21 @@ impl Policy {
             })
             .map_or(Disposition::Unreviewed, |decision| decision.disposition)
     }
+}
+
+/// Keep the policy readable only by its owner, where the platform says so.
+///
+/// The file names the paths being watched and the rules being enforced, which
+/// is a map of what a monitored agent should avoid touching. Windows inherits
+/// the directory's access control list and has no mode bits, so there is
+/// nothing to set there.
+#[cfg(unix)]
+fn restrict(file: &std::fs::File) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt as _;
+    file.set_permissions(std::fs::Permissions::from_mode(0o600))
+}
+
+#[cfg(not(unix))]
+fn restrict(_file: &std::fs::File) -> std::io::Result<()> {
+    Ok(())
 }

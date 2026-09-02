@@ -11,6 +11,7 @@ use crate::network::DnsOutcome;
 use crate::scalar::Access;
 use crate::scalar::Direction;
 use crate::scalar::Protocol;
+use crate::scalar::Reachability;
 use crate::scalar::UnixMillis;
 
 /// What is asserted about a subject.
@@ -157,6 +158,12 @@ pub enum Claim {
         access: Access,
         /// Whether the path holds a credential.
         sensitive: bool,
+        /// What the probe actually established.
+        ///
+        /// A stat that succeeded and a kernel that said "this account may read
+        /// it" are not the same finding, and the reachable column used to
+        /// present them as one.
+        evidence: Reachability,
     },
     /// The subject belongs to a known agent family.
     AgentFamily {
