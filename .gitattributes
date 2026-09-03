@@ -1,0 +1,11 @@
+* text=auto
+
+# The interoperability fixtures are byte-exact artefacts. Every evidence id and
+# every signature Topgent has written is a digest over bytes of this shape, and
+# a checkout that rewrote a line ending would change them.
+#
+# Found by CI on 2026-09-03: both Windows jobs failed the pinned-bundle test
+# while macOS and Linux passed, because git had turned each LF into CRLF on
+# checkout. The test was right and the storage was wrong. Later rules win in
+# this file, so this one has to sit below the catch-all above.
+crates/topgent-evidence/tests/fixtures/** -text
