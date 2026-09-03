@@ -156,6 +156,14 @@ impl Collector for SocketCollector {
                     direction: row.direction,
                     opened_at: row.opened_at,
                     bytes: row.bytes,
+                    // `ss -p`, `lsof -i` and `netstat -ano` each return the
+                    // kernel's own pairing of a socket with its owning
+                    // process: the tuple and the owner arrive on the same row,
+                    // with nothing searched and no key relaxed. The weaker
+                    // bases exist for a lookup that had to fall back, which
+                    // this is not. That the listing is a snapshot is carried
+                    // by the coverage state, never by the basis.
+                    basis: topgent_facts::MatchBasis::ExactTuple,
                 },
             ));
         }
@@ -183,6 +191,9 @@ impl Collector for SocketCollector {
                         // it was created, and counts nothing.
                         opened_at: None,
                         bytes: None,
+                        // Docker states a published binding. It names no
+                        // matching procedure either.
+                        basis: topgent_facts::MatchBasis::Unreported,
                     },
                 ));
             }

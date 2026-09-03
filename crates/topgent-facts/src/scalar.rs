@@ -251,3 +251,73 @@ impl Reachability {
         matches!(self, Self::AccountReadable)
     }
 }
+
+/// How a socket was tied to the process that owns it.
+///
+/// The distinctions are the ones that change what may be claimed, not the ones
+/// a particular backend happens to make. A complete four-tuple matched to a
+/// live process is a different finding from a match that only succeeded after
+/// the local address was zeroed, and a backend that reports an owner without
+/// saying how it found one is a third thing again.
+///
+/// Ordered weakest to strongest, so the weaker of two bases is the smaller one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum MatchBasis {
+    /// The backend named an owner but would not say how it matched.
+    ///
+    /// Not nothing, and not a full answer. It is treated as the floor rather
+    /// than discarded, because the owner is real evidence even when its
+    /// provenance is missing.
+    Unreported,
+    /// The match needed a listening socket entry, which carries no remote peer.
+    Listener,
+    /// The match needed the local address zeroed, so the socket was recorded
+    /// while bound to a wildcard address.
+    WildcardLocal,
+    /// The complete four-tuple matched a live process.
+    ExactTuple,
+    /// The kernel named the process as the event happened.
+    ///
+    /// Stronger than any table search, and not the same thing. A socket table
+    /// is a snapshot that has to be searched, and a search can be wrong. An
+    /// audit or trace record carries the process the kernel itself attributed
+    /// the syscall to at the moment of the syscall, so there is no key to
+    /// relax and no window in which the answer could have changed.
+    KernelEvent,
+}
+
+impl MatchBasis {
+    /// Stable report and journal label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unreported => "unreported",
+            Self::Listener => "listener",
+            Self::WildcardLocal => "wildcard_local",
+            Self::ExactTuple => "exact_tuple",
+            Self::KernelEvent => "kernel_event",
+        }
+    }
+
+    /// What was established, in the words a report should use.
+    #[must_use]
+    pub const fn statement(self) -> &'static str {
+        match self {
+            Self::Unreported => "the socket table named an owner without saying how it matched",
+            Self::Listener => "the match came from a listening socket, which names no peer",
+            Self::WildcardLocal => "the match needed the local address treated as a wildcard",
+            Self::ExactTuple => "the complete four-tuple matched a live process",
+            Self::KernelEvent => "the kernel named the process as the event happened",
+        }
+    }
+
+    /// Whether nothing was relaxed, guessed, or left unstated.
+    ///
+    /// True for a complete tuple and for a kernel event. The two arrive by
+    /// different routes and neither leaves anything to infer, which is the
+    /// only property a claim can rest on.
+    #[must_use]
+    pub const fn is_exact(self) -> bool {
+        matches!(self, Self::ExactTuple | Self::KernelEvent)
+    }
+}

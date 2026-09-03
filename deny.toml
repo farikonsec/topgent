@@ -16,7 +16,13 @@
 # file references the same identifiers rather than restating the reasoning.
 
 [graph]
-all-features = false
+# Every optional dependency is checked, not only the ones the default build
+# turns on. Measured 2026-09-02: with this false, `cargo deny list` did not
+# mention `rustnet-host` or `rustnet-core` at all, because they sit behind an
+# off-by-default feature. A dependency that ships in some builds and is
+# licence-checked in none is the worst of both, and an optional dependency is
+# exactly where an unreviewed licence would arrive unnoticed.
+all-features = true
 
 [advisories]
 version = 2

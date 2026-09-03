@@ -6,9 +6,11 @@
 
 pub(crate) mod approval;
 pub(crate) mod asset;
+pub(crate) mod benchmark;
 pub(crate) mod context;
 pub(crate) mod doctor;
 pub(crate) mod events;
+pub(crate) mod evidence;
 pub(crate) mod export;
 pub(crate) mod lab;
 pub(crate) mod network;

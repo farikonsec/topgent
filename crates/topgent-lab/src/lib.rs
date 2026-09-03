@@ -7,6 +7,9 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
+pub mod bench;
+pub mod overclaim;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 

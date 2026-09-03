@@ -147,9 +147,18 @@ pub fn assess_with(agent: &Agent, policy: &topgent_policy::Policy) -> Risk {
         .fold(0_u32, |acc, f| acc.saturating_add(f.points))
         .min(MAX_SCORE);
 
+    // A collector that refused to gather its inputs makes every total below
+    // meaningless, however carefully it was computed. The band says so rather
+    // than the number pretending otherwise.
+    let grade = if agent.unevaluated.is_empty() {
+        Grade::from_score(score)
+    } else {
+        Grade::NotEvaluated
+    };
+
     Risk {
         score,
-        grade: Grade::from_score(score),
+        grade,
         factors,
         identity_multiplier: mult,
     }

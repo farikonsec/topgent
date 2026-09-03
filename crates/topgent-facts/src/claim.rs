@@ -10,6 +10,7 @@ use crate::network::ConnectionOutcome;
 use crate::network::DnsOutcome;
 use crate::scalar::Access;
 use crate::scalar::Direction;
+use crate::scalar::MatchBasis;
 use crate::scalar::Protocol;
 use crate::scalar::Reachability;
 use crate::scalar::UnixMillis;
@@ -89,6 +90,14 @@ pub enum Claim {
         /// endpoint was visible has never been a volume; only a counter the
         /// kernel itself maintains belongs here.
         bytes: Option<ByteCounters>,
+        /// How the socket was tied to the process this fact is about.
+        ///
+        /// A tool that lists a process's open sockets names an owner without
+        /// saying how it matched, which is [`MatchBasis::Unreported`] and not a
+        /// defect. A backend that searched a socket table can say whether the
+        /// whole tuple matched or whether a key had to be relaxed, and those
+        /// are different findings that used to render identically.
+        basis: MatchBasis,
     },
     /// A previously connected socket was closed, with kernel-timestamp duration.
     SocketClosed {
@@ -200,6 +209,17 @@ pub enum Claim {
         /// How, such as `mcp`, `child-process` or `localhost`.
         via: String,
     },
+    /// A collector could not evaluate this subject, and says so.
+    ///
+    /// The claim exists because silence is ambiguous. A reach collector that
+    /// skips an agent owned by another account is doing the right thing, but a
+    /// report where that skip is indistinguishable from "nothing was found"
+    /// presents an unexamined agent as a clean one. Stating the skip is what
+    /// lets everything downstream tell a zero from an absence.
+    SubjectNotEvaluated {
+        /// Why, in the words a report should use.
+        reason: String,
+    },
     /// Topgent itself did something.
     ///
     /// Enforcement writes this, so an action taken and an action observed are the
@@ -232,6 +252,7 @@ impl Claim {
             Self::ModelInUse { .. } => "model_in_use",
             Self::ConnectorDeclared { .. } => "connector_declared",
             Self::InvokesAgent { .. } => "invokes_agent",
+            Self::SubjectNotEvaluated { .. } => "subject_not_evaluated",
             Self::ActionTaken { .. } => "action_taken",
         }
     }

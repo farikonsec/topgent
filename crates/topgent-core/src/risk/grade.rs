@@ -11,6 +11,15 @@ use super::factor::Factor;
 /// Always shown with the score and the factors, never alone.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Grade {
+    /// A collector refused to gather the inputs, so there is no conclusion.
+    ///
+    /// Ordered below [`Grade::Low`] so a sort by severity does not float it to
+    /// the top, and kept out of [`Grade::from_score`] entirely: no total ever
+    /// produces this band. A score of zero from all the inputs and a score of
+    /// zero from none of them are different answers, and before this variant
+    /// existed they rendered identically as `LOW`, which reads as *safe* and
+    /// means *nobody looked*.
+    NotEvaluated,
     /// Nothing notable.
     Low,
     /// Worth knowing about.
@@ -40,6 +49,7 @@ impl Grade {
     #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
+            Self::NotEvaluated => "NOT EVALUATED",
             Self::Low => "LOW",
             Self::Medium => "MEDIUM",
             Self::High => "HIGH",
@@ -55,6 +65,7 @@ impl Grade {
     #[must_use]
     pub fn from_label(label: &str) -> Option<Self> {
         match label.to_ascii_uppercase().as_str() {
+            "NOT EVALUATED" => Some(Self::NotEvaluated),
             "LOW" => Some(Self::Low),
             "MEDIUM" => Some(Self::Medium),
             "HIGH" => Some(Self::High),
@@ -64,9 +75,13 @@ impl Grade {
     }
 
     /// How many of four marks are filled, so the band reads without colour.
+    ///
+    /// Zero for [`Grade::NotEvaluated`], which is the honest count: a filled
+    /// mark would be a claim about severity and there is none to make.
     #[must_use]
     pub const fn pips(self) -> u8 {
         match self {
+            Self::NotEvaluated => 0,
             Self::Low => 1,
             Self::Medium => 2,
             Self::High => 3,

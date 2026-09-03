@@ -66,7 +66,16 @@ fn a_fact_from_an_unknown_schema_is_refused_rather_than_guessed_at() {
             expected: SCHEMA_VERSION,
         }
     );
-    assert!(err.to_string().contains("unknown fact schema v2"));
+    // Derived, not spelled out. A literal here breaks on every schema bump
+    // while testing nothing about the bump.
+    assert!(
+        err.to_string()
+            .contains(&format!("unknown fact schema {future}"))
+    );
+    assert!(
+        err.to_string()
+            .contains(&format!("speaks {SCHEMA_VERSION}"))
+    );
 }
 
 #[test]
@@ -187,6 +196,7 @@ fn every_claim_has_a_stable_kind() {
         Claim::SocketOpen {
             protocol: topgent_facts::Protocol::Tcp,
             bytes: None,
+            basis: topgent_facts::MatchBasis::Unreported,
             opened_at: None,
             host: "api.anthropic.com".to_owned(),
             port: 443,

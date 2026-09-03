@@ -316,12 +316,18 @@ impl Palette {
     /// The colour for a grade, matched case-insensitively because the report
     /// has used both cases across versions.
     #[must_use]
+    #[allow(clippy::match_same_arms)] // The duplicate arm is the point; see below.
     pub fn grade(&self, grade: &str) -> Color {
         match grade.to_ascii_uppercase().as_str() {
             "CRITICAL" => self.critical,
             "HIGH" => self.high,
             "MEDIUM" => self.medium,
             "LOW" => self.low,
+            // Deliberate rather than inherited. `inert` is where an unknown
+            // string already landed, and landing there by accident is how a
+            // band that means "nobody looked" would come to wear a colour that
+            // means "nothing found".
+            "NOT EVALUATED" => self.inert,
             _ => self.inert,
         }
     }
@@ -684,6 +690,55 @@ mod colour_parsing {
     fn wrong_length_and_non_hex_are_refused() {
         for value in ["#12345", "#1234567", "", "zzzzzz"] {
             assert!(parse(value).is_err(), "{value} must be refused");
+        }
+    }
+}
+
+#[cfg(test)]
+mod grade_colour_tests {
+    #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+
+    use super::Appearance;
+
+    /// Every band the core can produce has a colour chosen for it.
+    ///
+    /// The failure this guards is silence: an unmatched band falls to `inert`,
+    /// which is the right colour for "nobody looked" and the wrong one for a
+    /// band somebody forgot to add. Listing them makes the omission fail here.
+    ///
+    /// Checked on every appearance, because a band given a colour in one theme
+    /// and forgotten in another is the same omission, half hidden.
+    #[test]
+    fn every_band_the_core_produces_is_matched_by_name() {
+        use topgent_core::risk::Grade;
+        let bands = [
+            Grade::NotEvaluated,
+            Grade::Low,
+            Grade::Medium,
+            Grade::High,
+            Grade::Critical,
+        ];
+        for appearance in [
+            Appearance::Dark,
+            Appearance::Light,
+            Appearance::HighContrast,
+        ] {
+            let palette = appearance.palette();
+            let unknown = palette.grade("a band nobody defined");
+            for band in bands {
+                let named = palette.grade(band.label());
+                if band == Grade::NotEvaluated {
+                    assert_eq!(named, unknown, "the unevaluated band is deliberately inert");
+                } else {
+                    assert_ne!(
+                        named,
+                        unknown,
+                        "{} falls through to the unknown colour in {}",
+                        band.label(),
+                        appearance.label()
+                    );
+                }
+            }
         }
     }
 }

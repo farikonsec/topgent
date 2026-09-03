@@ -248,6 +248,7 @@ impl Stream {
         self.push(Claim::SocketOpen {
             protocol: topgent_facts::Protocol::Tcp,
             bytes: None,
+            basis: topgent_facts::MatchBasis::Unreported,
             opened_at: None,
             host: host.to_owned(),
             port,
@@ -267,6 +268,7 @@ impl Stream {
         self.push(Claim::SocketOpen {
             protocol: topgent_facts::Protocol::Tcp,
             bytes: None,
+            basis: topgent_facts::MatchBasis::Unreported,
             opened_at: Some(topgent_facts::UnixMillis(opened_at)),
             host: host.to_owned(),
             port,
@@ -287,6 +289,7 @@ impl Stream {
         self.push(Claim::SocketOpen {
             protocol: topgent_facts::Protocol::Tcp,
             bytes: Some(topgent_facts::ByteCounters { sent, received }),
+            basis: topgent_facts::MatchBasis::Unreported,
             opened_at: None,
             host: host.to_owned(),
             port,

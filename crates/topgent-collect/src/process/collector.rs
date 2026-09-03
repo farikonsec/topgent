@@ -41,9 +41,18 @@ impl Collector for ProcessCollector {
         }
 
         let mut facts = Vec::new();
-        for p in procs.iter().filter(|p| {
-            self.include_unrecognised || (p.family.is_some() && !is_same_family_relaunch(p, &procs))
-        }) {
+        // `include_unrecognised` widens which processes are reported. It is not
+        // a licence to double-count a recognised one: a launcher wrapper that
+        // spawns the real binary as its immediate child is still one agent run,
+        // however wide the net is. Written as `||` inside the first half, the
+        // flag skipped the relaunch check too, and a benchmark fixture that
+        // spawns copies of itself came back as three agents where there was
+        // one.
+        for p in procs
+            .iter()
+            .filter(|p| self.include_unrecognised || p.family.is_some())
+            .filter(|p| !is_same_family_relaunch(p, &procs))
+        {
             facts.extend(emit(
                 ID,
                 PROBE,

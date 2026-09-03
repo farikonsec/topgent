@@ -2,6 +2,7 @@
 
 pub(crate) fn lab_command(args: &[String]) -> i32 {
     match args.get(1).map(String::as_str) {
+        Some("benchmark") => crate::commands::benchmark::benchmark_command(args),
         Some("catalogue") => {
             let Ok(catalogue) = topgent_collect::signatures::builtin() else {
                 eprintln!("topgent lab: built-in signature catalogue is invalid");

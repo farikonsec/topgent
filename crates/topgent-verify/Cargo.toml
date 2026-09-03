@@ -1,0 +1,19 @@
+[package]
+name = "topgent-verify"
+description = "Offline verifier for Topgent evidence bundles. Depends on nothing that produced them."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "topgent-verify"
+path = "src/main.rs"
+
+[dependencies]
+topgent-evidence = { path = "../topgent-evidence" }
+
+[lints]
+workspace = true

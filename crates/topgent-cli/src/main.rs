@@ -24,10 +24,11 @@ topgent - AI agent security monitor
   topgent --watch          keep looking
   topgent doctor           which sensors work on this host
   topgent events           what changed
-  topgent stop <pid>       terminate a verified process
+  topgent stop <pid>       terminate a process, re-checking its identity first
 
   topgent export cyclonedx [--format json|html] [--output PATH]
   topgent policy check [--input REPORT] [--threshold LEVEL] [--require-coverage]
+  topgent evidence explain <claim-id> --bundle PATH
 
   topgent --version        which build this is
 
@@ -58,6 +59,7 @@ fn main() {
             "stop" | "kill" => Some(commands::stop::stop_command(&args)),
             "events" | "log" => Some(commands::events::events_command(&args)),
             "doctor" => Some(commands::doctor::doctor_command(&args)),
+            "evidence" => Some(commands::evidence::evidence_command(&args)),
             "lab" => Some(commands::lab::lab_command(&args)),
             "export" => Some(commands::export::export_command(&args)),
             "policy" => Some(commands::policy::policy_command(&args)),

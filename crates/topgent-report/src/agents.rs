@@ -100,6 +100,9 @@ pub(crate) fn agent_json((a, r): &(Agent, Risk), policy: &Policy, generated_at: 
         "discovery_confidence": a.discovery_confidence.label(),
         "score": r.score,
         "grade": r.grade.label(),
+        // Non-empty means a collector refused to gather its inputs for this
+        // agent, so the score beside it was computed without them.
+        "not_evaluated": a.unevaluated.clone(),
         "pips": r.grade.pips(),
         "outbound": a.outbound_count(),
         "factors": r.factors.iter().map(|f| {
@@ -205,6 +208,7 @@ mod tests {
             resources: Vec::new(),
             invokes: Vec::new(),
             actions: Vec::new(),
+            unevaluated: Vec::new(),
             discovery_confidence: topgent_facts::Confidence::Certain,
             evidence_confidence: std::collections::BTreeMap::new(),
             fact_count: 1,

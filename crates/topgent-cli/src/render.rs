@@ -82,7 +82,7 @@ pub(crate) fn render(show_facts: bool) {
                 agent.id.pid.to_string(),
                 risk.factors
                     .first()
-                    .map_or_else(|| "-".to_owned(), |f| f.title.clone()),
+                    .map_or_else(|| standing_state(agent), |f| f.title.clone()),
             ]
         })
         .collect();
@@ -127,6 +127,24 @@ pub(crate) fn render(show_facts: bool) {
 ///
 /// Its own function because it is a different question from the table above:
 /// that one says what is running, this one says why the top row is the top row.
+/// What the row is, when no factor scored.
+///
+/// A dash is right for a process with nothing against it and wrong for an
+/// editor host with three agent extensions loaded, which is what the machine
+/// this was written on had: `Code Helper (Plugin)  LOW  0  -`, the least
+/// alarming row in the table for arguably its most interesting process.
+///
+/// Topgent already knows. It declines to say *which* extension caused a
+/// host-level event, correctly, and that refusal had been turning into saying
+/// nothing at all.
+fn standing_state(agent: &Agent) -> String {
+    match agent.extensions.len() {
+        0 => "-".to_owned(),
+        1 => "1 agent extension active in a shared editor host".to_owned(),
+        many => format!("{many} agent extensions active in a shared editor host"),
+    }
+}
+
 fn why(agent: &Agent, risk: &Risk, ink: crate::style::Ink) -> String {
     use std::fmt::Write as _;
     let mut out = String::new();

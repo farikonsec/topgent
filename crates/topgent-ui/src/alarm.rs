@@ -174,7 +174,9 @@ mod tests {
         for grade in ["CRITICAL", "HIGH", "MEDIUM", "critical"] {
             assert!(worth_raising(grade), "{grade} should raise");
         }
-        for grade in ["LOW", "", "unknown", "INFO"] {
+        // NOT EVALUATED must not raise: there is no finding to interrupt
+        // somebody for, and an alarm would assert a severity nobody measured.
+        for grade in ["LOW", "", "unknown", "INFO", "NOT EVALUATED"] {
             assert!(!worth_raising(grade), "{grade} should not raise");
         }
     }

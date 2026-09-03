@@ -157,6 +157,10 @@ impl Collector for DnsEventCollector {
                             // Audit records the contact, not when the socket
                             // to the resolver was created.
                             opened_at: None,
+                            // The audit record names the process the kernel attributed
+                            // the syscall to, as it happened. Nothing was searched and
+                            // no key was relaxed.
+                            basis: topgent_facts::MatchBasis::KernelEvent,
                         },
                     )
                 })

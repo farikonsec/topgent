@@ -20,6 +20,7 @@
 #![deny(missing_docs)]
 
 pub mod asset_inventory;
+pub mod attribution;
 pub mod config;
 pub mod container;
 pub mod dns_event;
@@ -27,6 +28,7 @@ pub mod editor;
 pub mod filesystem;
 pub mod intercept;
 pub mod network_event;
+pub mod overhead;
 pub mod process;
 pub mod reach;
 pub mod resolve;

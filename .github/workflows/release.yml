@@ -251,6 +251,43 @@ jobs:
           cp "target/${{ matrix.target }}/release/topgent-ui" "dist/$name/Topgent"
           chmod +x "dist/$name/Topgent"
           cp README.md LICENSE NOTICE "dist/$name/"
+          # An icon and a desktop entry. Windows links the .ico as a resource
+          # and macOS carries an .icns in the bundle, so Linux was the only
+          # platform shipping a binary a file manager had nothing to draw.
+          cp assets/icon.png "dist/$name/topgent.png"
+          cat > "dist/$name/topgent.desktop" <<DESKTOP
+          [Desktop Entry]
+          Type=Application
+          Name=Topgent
+          Comment=AI agent security monitor
+          Exec=Topgent
+          Icon=topgent
+          Terminal=false
+          Categories=System;Security;Monitor;
+          DESKTOP
+          sed -i 's/^          //' "dist/$name/topgent.desktop"
+          cat > "dist/$name/install-desktop-entry.sh" <<'INSTALL'
+          #!/usr/bin/env sh
+          # Optional. Puts Topgent in the application menu with its icon.
+          # Everything it touches is under ~/.local, and it prints each step.
+          set -eu
+          here=$(cd "$(dirname "$0")" && pwd)
+          mkdir -p "$HOME/.local/bin" "$HOME/.local/share/applications" \
+                   "$HOME/.local/share/icons/hicolor/512x512/apps"
+          install -m 755 "$here/Topgent" "$HOME/.local/bin/Topgent"
+          install -m 644 "$here/topgent.png" \
+            "$HOME/.local/share/icons/hicolor/512x512/apps/topgent.png"
+          sed "s|^Exec=Topgent$|Exec=$HOME/.local/bin/Topgent|" "$here/topgent.desktop" \
+            > "$HOME/.local/share/applications/topgent.desktop"
+          chmod 644 "$HOME/.local/share/applications/topgent.desktop"
+          command -v update-desktop-database >/dev/null 2>&1 \
+            && update-desktop-database "$HOME/.local/share/applications" || true
+          echo "installed to ~/.local; remove with rm ~/.local/bin/Topgent \
+          ~/.local/share/applications/topgent.desktop \
+          ~/.local/share/icons/hicolor/512x512/apps/topgent.png"
+          INSTALL
+          sed -i 's/^          //' "dist/$name/install-desktop-entry.sh"
+          chmod +x "dist/$name/install-desktop-entry.sh"
           cd dist && tar -czf "${name}.tar.gz" "$name" && rm -rf "$name"
       - uses: actions/upload-artifact@v7
         with:

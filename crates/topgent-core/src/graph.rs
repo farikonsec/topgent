@@ -214,6 +214,12 @@ pub struct Agent {
     pub invokes: Vec<AgentEdge>,
     /// Actions Topgent took against it, sorted.
     pub actions: Vec<(String, bool)>,
+    /// Why some collector could not evaluate this agent, when one said so.
+    ///
+    /// Non-empty means an unexamined agent. A score computed without the
+    /// inputs a collector refused to gather is not the same answer as the same
+    /// score computed with them, and this is what lets the two be told apart.
+    pub unevaluated: Vec<String>,
     /// How sure we are this is an agent at all.
     pub discovery_confidence: Confidence,
     /// Weakest confidence seen per kind of evidence, keyed by claim kind.
@@ -408,6 +414,7 @@ struct Builder {
     resources: BTreeMap<String, ResourceBuilder>,
     invokes: BTreeMap<u32, String>,
     actions: Vec<(String, bool)>,
+    unevaluated: Vec<String>,
     children: BTreeMap<u32, (String, u16)>,
     best_confidence: Option<Confidence>,
     claim_confidence: BTreeMap<&'static str, Confidence>,
@@ -655,6 +662,7 @@ fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
             direction,
             opened_at,
             bytes,
+            ..
         } => {
             // The protocol is part of the identity. A UDP datagram and a TCP
             // stream to the same host and port are two different things, and
@@ -738,6 +746,9 @@ fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
         Claim::ActionTaken { action, succeeded } => {
             b.actions.push((action.clone(), *succeeded));
         }
+        Claim::SubjectNotEvaluated { reason } => {
+            b.unevaluated.push(reason.clone());
+        }
     }
 }
 
@@ -814,6 +825,9 @@ fn finish(id: AgentId, b: Builder) -> Agent {
 
     let mut actions = b.actions;
     actions.sort();
+    let mut unevaluated = b.unevaluated;
+    unevaluated.sort();
+    unevaluated.dedup();
 
     let extensions = b
         .extensions
@@ -857,6 +871,7 @@ fn finish(id: AgentId, b: Builder) -> Agent {
         resources,
         invokes,
         actions,
+        unevaluated,
         discovery_confidence: b.best_confidence.unwrap_or(Confidence::Possible),
         evidence_confidence: b.claim_confidence,
         fact_count: b.fact_count,

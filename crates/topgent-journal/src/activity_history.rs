@@ -298,6 +298,7 @@ mod tests {
                 Claim::SocketOpen {
                     protocol: topgent_facts::Protocol::Tcp,
                     bytes: None,
+                    basis: topgent_facts::MatchBasis::Unreported,
                     opened_at: None,
                     host: "203.0.113.10".to_owned(),
                     port: 443,

@@ -47,6 +47,8 @@ pub use asset::{AssetDigest, InstalledAsset, InstalledAssetKind};
 pub use claim::Claim;
 pub use fact::{Fact, Provenance};
 pub use network::{ByteCounters, ConnectionOutcome, DnsOutcome};
-pub use scalar::{Access, Confidence, Direction, Protocol, Reachability, Tri, UnixMillis};
+pub use scalar::{
+    Access, Confidence, Direction, MatchBasis, Protocol, Reachability, Tri, UnixMillis,
+};
 pub use subject::Subject;
 pub use version::{FactError, SCHEMA_VERSION, SchemaVersion};

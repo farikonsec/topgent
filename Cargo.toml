@@ -1,9 +1,9 @@
 [workspace]
 resolver = "3"
-members = ["crates/topgent-facts", "crates/topgent-policy", "crates/topgent-core", "crates/topgent-collect", "crates/topgent-enforce", "crates/topgent-journal", "crates/topgent-export", "crates/topgent-report", "crates/topgent-lab", "crates/topgent-cli", "crates/topgent-ui"]
+members = ["crates/topgent-facts", "crates/topgent-evidence", "crates/topgent-policy", "crates/topgent-core", "crates/topgent-collect", "crates/topgent-enforce", "crates/topgent-journal", "crates/topgent-export", "crates/topgent-report", "crates/topgent-lab", "crates/topgent-verify", "crates/topgent-cli", "crates/topgent-ui"]
 
 [workspace.package]
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"

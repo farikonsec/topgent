@@ -2,9 +2,11 @@
 
 What Topgent defends against, what it does not, and why. This document states limits. A capability absent here is absent from the product.
 
+This covers the shipped unprivileged product. `docs/NORMATIVE-CLAIMS.md` §5 carries the adversary set for the privileged sensor that is planned but not built, and §3 fixes what each word in a finding means.
+
 ## 1. Scope
 
-Topgent is an unprivileged local process. It enumerates AI agent processes running under the invoking user, records their reachable and observed resources, scores risk from deterministic rules, journals state changes, and can terminate a verified process.
+Topgent is an unprivileged local process. It enumerates AI agent processes running under the invoking user, records their reachable and observed resources, scores risk from deterministic rules, journals state changes, and can terminate a process after re-checking its identity at the moment of the kill.
 
 It has no server, no account, and no listening socket. The desktop application communicates with the core in-process.
 
@@ -94,6 +96,12 @@ Trust is reported as a state rather than a verdict: `system_trusted`, `user_mana
 **Mitigation.** The filesystem, network-event and DNS collectors build their maps from every visible process, so being seen doing something is not enough. An identity becomes an agent only with a process observation plus either a recognised family or a verified active editor extension. Everything else is retained as refused, with the identity it was about, so an attribution defect stays findable.
 
 **Residual risk.** A binary installed at a path the catalogue knows is recognised on that evidence. Detection is executable provenance, not code identity.
+
+### T11. A signed bundle is read as proof the sensor was right
+
+**Mitigation, by construction.** A checkpoint signature covers a chain of record hashes, so modification, insertion, reordering and truncation after signing are each detected with a named reason. It covers nothing else. The verifier prints what a pass does and does not establish on every run, and a bundle whose stream has holes is a separate outcome with its own exit code rather than a pass.
+
+**Residual risk.** A holder of the signing key can sign a bundle full of fiction and it will verify. An attacker with root or kernel access on the collecting host is one such holder. This is stated, not mitigated, and no key storage scheme changes it.
 
 ## 5. Non-goals
 

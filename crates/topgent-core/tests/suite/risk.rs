@@ -721,3 +721,47 @@ fn a_grade_label_round_trips_and_orders_by_severity() {
     assert!(Grade::Medium < Grade::High);
     assert!(Grade::High < Grade::Critical);
 }
+
+/// A collector that refused to gather its inputs makes the total meaningless.
+///
+/// Found live on Kali: a recognised agent owned by a second account rendered
+/// as `LOW`, score `0`, no findings, which reads as *this agent is safe* and
+/// means *nobody looked at it*. Same rendering, opposite meaning.
+#[test]
+fn an_agent_nobody_could_evaluate_is_not_graded_low() {
+    let mut agent = only(&fixtures::busy_agent());
+    agent.unevaluated.clear();
+    let scored = topgent_core::risk::assess(&agent);
+    assert_ne!(scored.grade, topgent_core::risk::Grade::NotEvaluated);
+
+    agent.unevaluated = vec!["reachability was not evaluated: another account".to_owned()];
+    let unexamined = topgent_core::risk::assess(&agent);
+    assert_eq!(unexamined.grade, topgent_core::risk::Grade::NotEvaluated);
+    // The factors and the total are still reported. They are what was gathered;
+    // the band is what says the gathering was incomplete.
+    assert_eq!(unexamined.score, scored.score);
+    assert_eq!(unexamined.factors.len(), scored.factors.len());
+}
+
+#[test]
+fn no_total_ever_produces_the_unevaluated_band() {
+    use topgent_core::risk::Grade;
+    for score in 0..=100 {
+        assert_ne!(
+            Grade::from_score(score),
+            Grade::NotEvaluated,
+            "score {score} produced a band no score should reach"
+        );
+    }
+}
+
+#[test]
+fn the_unevaluated_band_claims_no_severity() {
+    use topgent_core::risk::Grade;
+    assert_eq!(Grade::NotEvaluated.pips(), 0);
+    assert!(Grade::NotEvaluated < Grade::Low);
+    assert_eq!(
+        Grade::from_label(Grade::NotEvaluated.label()),
+        Some(Grade::NotEvaluated)
+    );
+}

@@ -76,6 +76,7 @@ pub(super) fn fact_draft(
             opened_at: _,
             bytes: _,
             direction,
+            ..
         } => {
             // A socket whose peer the platform does not expose is described as
             // what it is. `Observed endpoint *:0` would read as a bug; "holds a

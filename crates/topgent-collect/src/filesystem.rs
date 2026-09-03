@@ -45,6 +45,32 @@ impl Collector for FilesystemEventCollector {
         ID
     }
 
+    /// Two limits measured on a Kali guest, 2026-09-02, both permanent under
+    /// the current privilege model.
+    ///
+    /// The kernel counts audit events it dropped, and reading that counter
+    /// needs `CAP_AUDIT_CONTROL`: `auditctl -s` answers "You must be root".
+    /// Topgent is unprivileged, so it reports no loss accounting at all rather
+    /// than a zero it cannot stand behind. By `docs/NORMATIVE-CLAIMS.md` §3.7 a
+    /// collector without loss accounting can never claim completeness, and this
+    /// one never will.
+    ///
+    /// The second is subtler and was found by a read that produced nothing. An
+    /// audit record names the process that made the syscall. When an agent
+    /// reads a file through a short-lived child, `cat` or similar, the record
+    /// names the child, and by the time a sweep resolves that pid the child is
+    /// gone. The read is real and invisible. Reads the agent performs itself
+    /// are attributed correctly.
+    fn boundary(&self) -> Option<&'static str> {
+        Some(
+            "File access is attributed only to the process the kernel recorded making the \
+             syscall, so a read performed by an agent's short-lived child is not attributed to \
+             the agent and is not seen at all once that child exits. The kernel's dropped-event \
+             counter needs privilege Topgent does not take, so no loss accounting is reported \
+             and completeness is never claimed.",
+        )
+    }
+
     fn collect(&self, clock: &dyn Clock) -> Result<Vec<Fact>, CollectError> {
         #[cfg(not(any(target_os = "linux", windows)))]
         {

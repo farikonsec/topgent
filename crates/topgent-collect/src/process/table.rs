@@ -66,6 +66,36 @@ pub fn family_of(exe_name: &str) -> Option<&'static str> {
     crate::signatures::recognise(exe_name).map(|family| family.id.as_str())
 }
 
+/// What is printed where the operating system named no owner.
+///
+/// Never a number. `0` is root's uid, and an unanswerable question rendering as
+/// the most privileged account on the machine is the worst available default.
+pub const UNKNOWN_OWNER: &str = "unknown";
+
+/// The executable path with symlinks followed, where that is possible.
+///
+/// Package managers install a link in a `bin` directory pointing at the real
+/// file: npm, Homebrew and pipx all do. macOS reports the path the process was
+/// launched with, which is that link, while Linux `/proc/<pid>/exe` reports the
+/// target. So the same agent installed the same way was recognised on Linux and
+/// missed on macOS, because a family that requires path provenance matches
+/// against `.../node_modules/opencode-ai/bin/opencode.exe` and never against
+/// `~/.local/bin/opencode`.
+///
+/// Measured 2026-09-03: launched through the link, not detected; launched by
+/// the target path, detected at once. Every agent installed by a package
+/// manager on macOS was in the first case.
+///
+/// Falls back to the path as given when it cannot be resolved. A path that no
+/// longer exists is still the best thing known about a process that has since
+/// exited, and losing it would trade a false negative for a blank.
+fn resolved(path: &std::path::Path) -> String {
+    std::fs::canonicalize(path)
+        .unwrap_or_else(|_| path.to_path_buf())
+        .to_string_lossy()
+        .to_string()
+}
+
 /// Every process this user can see, as Topgent models it.
 ///
 /// Shared by the collectors that need process context, so the machine is walked
@@ -94,7 +124,7 @@ pub fn snapshot() -> Vec<ProcInfo> {
         .filter(|(_, p)| !matches!(p.status(), ProcessStatus::Dead | ProcessStatus::Zombie))
         .map(|(pid, p)| {
             let name = p.name().to_string_lossy().to_string();
-            let system_path = p.exe().map(|e| e.to_string_lossy().to_string());
+            let system_path = p.exe().map(resolved);
             let exe_path_known = system_path.is_some();
             let system_exe = system_path.unwrap_or_else(|| name.clone());
             // On Windows the command line is fetched for the whole batch
@@ -125,10 +155,26 @@ pub fn snapshot() -> Vec<ProcInfo> {
             // authorize a response. The resolved account name remains visible.
             #[cfg(windows)]
             let uid = 0;
-            let user = p
-                .user_id()
-                .and_then(|u| users.get_user_by_id(u))
-                .map_or_else(|| uid.to_string(), |u| u.name().to_owned());
+            // The same reasoning the typed owner below already carried, applied
+            // to the string a person reads. An owner the operating system did
+            // not state used to render as `0`, which is root's uid, so a
+            // process Topgent could learn nothing about was displayed as the
+            // most privileged account on the machine.
+            //
+            // Found 2026-09-03: macOS does not disclose the owning uid of a
+            // process belonging to another account to an unprivileged reader,
+            // so every such process was labelled `0`.
+            //
+            // A uid that was reported but has no name is still worth printing:
+            // `498` says which account, even when nothing can map it to a name.
+            let named = p.user_id().and_then(|u| users.get_user_by_id(u));
+            #[cfg(unix)]
+            let user = named.map_or_else(
+                || reported_uid.map_or_else(|| UNKNOWN_OWNER.to_owned(), |id| id.to_string()),
+                |u| u.name().to_owned(),
+            );
+            #[cfg(windows)]
+            let user = named.map_or_else(|| UNKNOWN_OWNER.to_owned(), |u| u.name().to_owned());
             ProcInfo {
                 pid: pid.as_u32(),
                 // sysinfo reports start time in whole seconds.

@@ -8,6 +8,12 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 
+[dev-dependencies]
+# Test-only. The interface deliberately takes grades as strings from the
+# report, so it does not link the core at runtime; the guard below needs the
+# real band list to notice when one is added and not given a colour.
+topgent-core = { path = "../topgent-core" }
+
 [lints]
 workspace = true
 

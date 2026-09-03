@@ -136,6 +136,49 @@ impl Collector for ReachCollector {
         ID
     }
 
+    /// Standing limits, all permanent until a privileged helper exists, and all
+    /// invisible in the report without this sentence.
+    ///
+    /// The account one is why this is here rather than left implied. Topgent
+    /// asks the kernel whether *its own* account may read a path, so an agent
+    /// running as somebody else is skipped entirely. Skipping is right; silence
+    /// about it is not, because an empty reachable column reads as "nothing is
+    /// reachable" when it means "nobody looked". `docs/NORMATIVE-CLAIMS.md`
+    /// §3.4 constraint 2 is what that discharges.
+    ///
+    /// Windows carries a fourth limit and it is the largest. This build has no
+    /// `AccessCheck`, so every answer degrades to path resolution and no
+    /// reachability finding can be raised at all. Measured on a Windows 11
+    /// guest, 2026-09-03: five credential paths, all `path_resolves`, agent
+    /// scored zero, where the same fixture on Linux scored a hundred on those
+    /// same paths. A Windows score is therefore not comparable with a Linux
+    /// one, and a reader who does not know that will read the lower number as
+    /// the safer machine.
+    fn boundary(&self) -> Option<&'static str> {
+        #[cfg(windows)]
+        {
+            Some(
+                "This build has no access check on Windows, so every answer degrades to path \
+                 resolution and no reachability finding is ever raised. A Windows score is not \
+                 comparable with a Linux or macOS one: the same agent with the same credentials \
+                 in reach scores lower here because the evidence cannot be gathered, not because \
+                 the machine is safer. Reachability is also answered only for agents owned by \
+                 the account Topgent runs as, and only over the declared inventory rather than \
+                 the filesystem.",
+            )
+        }
+        #[cfg(not(windows))]
+        {
+            Some(
+                "Reachability is answered only for agents owned by the account Topgent runs as, \
+                 only over the declared inventory rather than the filesystem, and only against \
+                 the permission model. An agent owned by another account is skipped rather than \
+                 answered for, and sandbox or privacy controls that could deny an access are not \
+                 evaluated.",
+            )
+        }
+    }
+
     fn collect(&self, clock: &dyn Clock) -> Result<Vec<Fact>, CollectError> {
         let Some(home) = self.home.clone().or_else(home_directory) else {
             return Err(CollectError::Unavailable {
@@ -167,6 +210,34 @@ impl Collector for ReachCollector {
             .collect();
 
         let mut facts = Vec::new();
+
+        // The complement of the filter below, stated rather than dropped. An
+        // agent owned by somebody else is skipped, which is right, and a report
+        // where that skip looks like "nothing was found" presents an unexamined
+        // agent as a clean one, which is not.
+        let mine: std::collections::BTreeSet<u32> =
+            crate::process::owned_by(candidates.clone(), &me)
+                .iter()
+                .map(|p| p.pid)
+                .collect();
+        for p in candidates.iter().filter(|p| !mine.contains(&p.pid)) {
+            facts.extend(emit(
+                ID,
+                &format!("owner check: {} is not {}", p.owner.label(), me.label()),
+                Confidence::Certain,
+                clock,
+                Subject::Process {
+                    pid: p.pid,
+                    started_at: p.started_at,
+                },
+                Claim::SubjectNotEvaluated {
+                    reason: "reachability was not evaluated: this agent is owned by another \
+                             account, and Topgent can only ask the kernel about its own"
+                        .to_owned(),
+                },
+            ));
+        }
+
         for p in crate::process::owned_by(candidates, &me) {
             let subject = Subject::Process {
                 pid: p.pid,

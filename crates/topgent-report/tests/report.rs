@@ -292,10 +292,13 @@ fn assert_report_shape(v: &Value) {
             assert!(agent.get(key).and_then(Value::as_array).is_some(), "{key}");
         }
 
-        // Grade is one of the four bands, never a raw number leaking through.
+        // Grade is one of the bands, never a raw number leaking through.
+        // NOT EVALUATED joined the list when an agent owned by another account
+        // stopped being graded LOW; this test only noticed once a machine
+        // actually had one running.
         let grade = agent["grade"].as_str().unwrap();
         assert!(
-            ["LOW", "MEDIUM", "HIGH", "CRITICAL"].contains(&grade),
+            ["NOT EVALUATED", "LOW", "MEDIUM", "HIGH", "CRITICAL"].contains(&grade),
             "unexpected grade {grade}"
         );
 
