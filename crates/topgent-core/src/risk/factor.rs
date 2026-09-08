@@ -60,7 +60,40 @@ pub enum FactorCode {
 }
 
 impl FactorCode {
-    /// Stable machine-readable name, for logs and tests.
+    /// The code of that name, if this build has one.
+    ///
+    /// Not `FromStr`: an unknown name is an answer, not an error, and it is
+    /// what the loader uses to refuse a catalogue naming a code that does not
+    /// exist.
+    #[must_use]
+    pub fn named(name: &str) -> Option<Self> {
+        [
+            Self::ArbitraryExecution,
+            Self::BroadWrite,
+            Self::UnrestrictedNetwork,
+            Self::SecretReachable,
+            Self::DeclarationDrift,
+            Self::AgentChain,
+            Self::ExfiltrationPath,
+            Self::ReconFanout,
+            Self::Watchlist,
+            Self::SandboxEscape,
+            Self::ExposedListener,
+            Self::OffensiveTool,
+            Self::ProcessExplosion,
+            Self::SuspiciousEndpoint,
+            Self::PrivatePeer,
+            Self::MetadataService,
+            Self::CredentialAccess,
+            Self::PersistenceWrite,
+            Self::SelfTampering,
+            Self::DisallowedAsset,
+        ]
+        .into_iter()
+        .find(|candidate| candidate.as_str() == name)
+    }
+
+    /// Stable machine-readable name, for logs, tests and the catalogue.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
         match self {

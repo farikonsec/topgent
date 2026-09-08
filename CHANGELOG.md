@@ -4,6 +4,35 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-08
+
+Packet capture, on all three operating systems, and the machinery to say
+honestly what it does and does not establish. Every number below was measured
+on macOS, Kali and Windows 11 with real agents running, and six of the entries
+are defects the laboratory found that reading the code would not have.
+
+### Added
+
+- **Packet capture on Linux, macOS and Windows.** It shows what a socket listing cannot: UDP peers, ICMP, connections that open and close between two sweeps, and traffic volume per endpoint. Off until granted, and granted per platform: `CAP_NET_RAW` on Linux, `/dev/bpf*` access on macOS, the Npcap driver on Windows. Topgent installs no driver and changes no permission on anybody's behalf.
+- **`topgent-capture`, the only binary that holds a privilege.** About eighty lines: read frames, print them, exit when the parent goes. The interface reads its output and holds no capability at all. The same separation Wireshark uses for `dumpcap`, for the same reason. Linux takes the grant on the helper; the interface never needs it again.
+- **No libpcap on Linux.** Linux hands raw frames to an ordinary `AF_PACKET` socket, so there is no C library to install and no unsafe binding in a crate that forbids unsafe code. macOS and Windows use libpcap and Npcap, which ship with the system SDK and the driver respectively.
+- **`Claim::TrafficObserved`, fact schema 4.** Neither existing claim could carry a captured flow without saying something false: `SocketOpen` asserts a socket exists now, and `ConnectionAttempt` names no protocol. Counts are packets and never bytes, because the capture reads only the front of each frame.
+- **`Sighting::Captured`.** The fourth and strongest way a destination becomes known, and the only one available for a protocol no socket listing reports. A socket listing and a capture of the same peer merge into one endpoint rather than two.
+- **Port scans, reported without a guess.** Twenty distinct ports on one host in an interval, counted the way Snort and Zeek count it. A scan's connections are refused, so no socket exists to attribute them through at any refresh rate; the finding names the host, states that it is unattributed, and states why.
+- **Which model an agent is using.** Read from the agent's own session files, configuration and command line, driven by a signature catalogue rather than code: twelve providers and eight agent families. A model on the command line is observed; one in a configuration file is declared.
+- **A control that starts a fresh event log.** The old log is renamed and kept. A security log is not deleted because somebody wanted a clear view.
+- **A healthy sensor can say what it saw and could not use.** A capture that read four hundred frames and attributed one flow is not a quiet capture, and a fact count of one said it was.
+
+### Fixed
+
+- **Capture facts were anchored to the wrong process, and produced nothing at all for a real agent.** An agent works through helpers, and the helper holds the port. Anchoring the flow there makes a fact about a process with no family, and the fold rejects every one of those. Found by comparing a live report against what the capture was measuring at the same moment; no test would have caught it.
+- **Every outbound connection was about to register a phantom listener.** A connection this host opens carries replies, and a reply packet looks inbound read on its own, so one conversation became an outbound flow and a listening one. A listening flow is an exposed listener, which is scored. Direction now comes from the socket table, which is the only thing that knows.
+- **Strict header parsing rejected every frame the capture reads.** The buffer holds headers only, so every frame arrives truncated. A strict parser is right about the frame and catastrophic about the feature: the capture would have seen only packets small enough to fit.
+- **The capture probe read a capability mask while claiming to open a socket.** A capability can be present and still refused by a container policy, a sandbox or `seccomp`. The mask would have reported available where the capture then failed.
+- **macOS reported a capture it could not do.** The probe asked only whether `/dev/bpf*` could be opened, said available, and would have shown a green light over a build with no macOS backend. Every platform now asks the capture itself first.
+- **The Windows socket parser returned no UDP rows.** It required five columns and a UDP row has four, because it carries no state.
+- **Five crash paths in `topgent capture status`.** It built its JSON through `Value`'s index operator, which panics on a shape it did not expect. Invisible because a test crate failed earlier in the lint run and stopped it before it reached the command line.
+
 ## [0.4.0] - 2026-09-03
 
 Written against three operating systems rather than one. Every number below was
@@ -149,7 +178,9 @@ The Linux desktop build is withheld. Tauri renders its Linux window through GTK3
 
 Documented in `THREAT-MODEL.md` and the Limits section of `README.md`. No pre-execution blocking on macOS or Windows, no per-extension attribution within a shared editor process, and no telemetry the platform does not supply.
 
-[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/farikonsec/topgent/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/farikonsec/topgent/compare/v0.2.2...v0.4.0
 [0.2.2]: https://github.com/farikonsec/topgent/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/farikonsec/topgent/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/farikonsec/topgent/compare/v0.1.0...v0.2.0

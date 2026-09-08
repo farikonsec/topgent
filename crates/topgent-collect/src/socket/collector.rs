@@ -17,7 +17,6 @@ use crate::Clock;
 use crate::CollectError;
 use crate::Collector;
 use crate::emit;
-use std::collections::BTreeMap;
 use topgent_facts::Claim;
 use topgent_facts::Confidence;
 use topgent_facts::Direction;
@@ -108,6 +107,17 @@ impl Collector for SocketCollector {
             .map(|text| parse_windows_tcp_connections(&text, clock.now()))
             .filter(|rows| !rows.is_empty());
 
+        // The kernel's own tables first, with no subprocess between them and
+        // this code. `ss` stays as the fallback for a host where `/proc` is
+        // restricted, and for the byte counters, which the tables do not
+        // carry. A source that says nothing is a source that fell back, never
+        // a host with no sockets.
+        #[cfg(target_os = "linux")]
+        let native_rows = {
+            let rows = super::proc_net::snapshot();
+            if rows.is_empty() { None } else { Some(rows) }
+        };
+
         // Fixed arguments. Nothing discovered anywhere in Topgent is ever
         // interpolated into a command line.
         let out = tool
@@ -128,12 +138,12 @@ impl Collector for SocketCollector {
         // A shell, browser helper, or downloaded utility remains part of the
         // agent's behaviour without becoming a noisy top-level agent itself.
         let processes = crate::process::snapshot();
-        let owners = agent_owners(&processes);
+        let owners = crate::process::agent_owners(&processes);
         let containers = crate::container::snapshot(&processes);
 
         let mut facts = Vec::new();
         #[cfg(target_os = "linux")]
-        let rows = parse_ss(&text);
+        let rows = native_rows.unwrap_or_else(|| parse_ss(&text));
         #[cfg(target_os = "macos")]
         let rows = parse_lsof(&text);
         #[cfg(windows)]
@@ -202,43 +212,11 @@ impl Collector for SocketCollector {
     }
 }
 
-fn agent_owners(processes: &[crate::process::ProcInfo]) -> BTreeMap<u32, Subject> {
-    let by_pid: BTreeMap<u32, &crate::process::ProcInfo> = processes
-        .iter()
-        .map(|process| (process.pid, process))
-        .collect();
-    processes
-        .iter()
-        .filter_map(|process| {
-            let mut current = Some(process.pid);
-            let mut owner = None;
-            for _ in 0..processes.len() {
-                let Some(pid) = current else { break };
-                let Some(candidate) = by_pid.get(&pid) else {
-                    break;
-                };
-                if let Some(family) = candidate.family {
-                    match owner {
-                        None => owner = Some((family, candidate.subject())),
-                        Some((owned_family, _)) if owned_family == family => {
-                            owner = Some((family, candidate.subject()));
-                        }
-                        Some(_) => break,
-                    }
-                }
-                current = candidate.parent;
-            }
-            owner.map(|(_, subject)| (process.pid, subject))
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     // Test code asserts and indexes; production code does neither.
     #![allow(clippy::indexing_slicing, clippy::panic, clippy::expect_used)]
 
-    use super::*;
     use crate::process::ProcInfo;
     use topgent_facts::{Subject, UnixMillis};
 
@@ -256,7 +234,7 @@ mod tests {
             parent,
             family,
         };
-        let owners = agent_owners(&[
+        let owners = crate::process::agent_owners(&[
             process(10, None, Some("codex-cli")),
             process(11, Some(10), None),
             process(12, Some(11), None),

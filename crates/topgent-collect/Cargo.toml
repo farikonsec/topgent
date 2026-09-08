@@ -9,14 +9,37 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+etherparse = { version = "0.21", default-features = false, features = ["std"] }
 topgent-facts = { path = "../topgent-facts" }
 topgent-policy = { path = "../topgent-policy" }
 sysinfo = { version = "0.39", default-features = false, features = ["system", "user"] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
 
+[dev-dependencies]
+etherparse = { version = "0.21", default-features = false, features = ["std"] }
+
 [lints]
 workspace = true
 
 [target."cfg(unix)".dependencies]
-rustix = { version = "1.1.4", default-features = false, features = ["fs", "std"] }
+rustix = { version = "1.1.4", default-features = false, features = ["fs", "process", "std"] }
+
+# Packet capture is a Linux capability in this build, so the socket wrapper is
+# a Linux dependency. `all` is what gates the packet-socket constants; without
+# it the domain and type this needs are not named.
+[target."cfg(target_os = \"linux\")".dependencies]
+socket2 = { version = "0.6", default-features = false, features = ["all"] }
+
+# macOS ships libpcap and its headers in the system SDK, so linking it needs
+# nothing a Mac does not already have. The unprivileged alternative is `ioctl`
+# on /dev/bpf*, which needs unsafe code this crate forbids.
+[target."cfg(target_os = \"macos\")".dependencies]
+pcap = "2"
+
+# Windows capture goes through Npcap, which presents the same API. Building
+# against it needs the Npcap SDK, which is headers and import libraries rather
+# than the driver; the driver is the operator's to install, and the capture
+# offer says so.
+[target."cfg(windows)".dependencies]
+pcap = "2"

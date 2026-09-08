@@ -129,7 +129,10 @@ impl Access {
 }
 
 /// Which side of a connection was initiated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// Ordered so it can key an ordered map, which is what the capture accumulator
+/// needs: inbound and outbound traffic to the same peer are two flows, not one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
     /// The process connected outwards.
     Outbound,
@@ -156,6 +159,13 @@ pub enum Protocol {
     Icmp,
     /// Something the platform named and this build does not model.
     Other,
+    /// The record that named this destination did not name a protocol.
+    ///
+    /// Appended rather than inserted, and never a substitute for a known one.
+    /// Audit records a connect and a close by host and port without saying
+    /// which protocol carried them, and calling those TCP because most of them
+    /// are would be a guess printed as an observation.
+    Unstated,
 }
 
 impl Protocol {
@@ -167,6 +177,7 @@ impl Protocol {
             Self::Udp => "udp",
             Self::Icmp => "icmp",
             Self::Other => "other",
+            Self::Unstated => "unstated",
         }
     }
 
@@ -189,6 +200,16 @@ impl Protocol {
     #[must_use]
     pub const fn peer_observable(self) -> bool {
         !matches!(self, Self::Icmp)
+    }
+
+    /// Whether a protocol was actually stated.
+    ///
+    /// `Unstated` is not a protocol. A reader deciding what a destination means
+    /// needs to be able to tell "this build does not model that protocol" from
+    /// "nothing said which protocol this was".
+    #[must_use]
+    pub const fn is_stated(self) -> bool {
+        !matches!(self, Self::Unstated)
     }
 }
 

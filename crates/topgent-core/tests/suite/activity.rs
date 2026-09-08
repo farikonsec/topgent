@@ -6,7 +6,12 @@ use topgent_core::{
 use topgent_facts::{Access, Confidence, ConnectionOutcome, Direction, DnsOutcome, UnixMillis};
 
 #[test]
-fn connection_attempts_are_visible_without_becoming_open_endpoints() {
+fn connection_attempts_reach_the_graph_without_being_reported_as_open() {
+    // This test used to assert that an attempt produced no endpoint at all.
+    // That threw away the only record of an agent that connects, acts and
+    // disconnects inside one sweep, which is the agent worth seeing. The
+    // property that mattered is kept and made explicit: the destination is
+    // known, and it is never described as a socket somebody is holding.
     let facts = Stream::new_at(42, UnixMillis(1_000))
         .seen("/opt/codex", 501, "testuser")
         .family("codex-cli")
@@ -14,11 +19,23 @@ fn connection_attempts_are_visible_without_becoming_open_endpoints() {
         .connection_attempt("198.51.100.20", 22, ConnectionOutcome::Blocked)
         .build();
     let agents = fold(&facts).agents;
-    assert!(
-        agents
-            .first()
-            .is_some_and(|agent| agent.endpoints.is_empty())
-    );
+    let agent = agents.first().expect("one agent");
+    assert_eq!(agent.endpoints.len(), 2, "both destinations are known");
+    for endpoint in &agent.endpoints {
+        assert_eq!(
+            endpoint.sightings,
+            vec![topgent_core::Sighting::Attempted],
+            "an attempt must never read as a held socket"
+        );
+        assert!(
+            !endpoint.protocol.is_stated(),
+            "audit names no protocol, and guessing one would be a printed guess"
+        );
+        assert!(
+            endpoint.opened_at.is_none() && endpoint.bytes.is_none(),
+            "nothing was measured, so nothing is claimed"
+        );
+    }
     let activity = build_activity(&facts, &agents);
     let phases = activity
         .events
@@ -388,17 +405,22 @@ fn durable_sequences_survive_restart_clock_skew_and_pid_reuse() {
 }
 
 #[test]
-fn a_closed_socket_is_timed_activity_but_not_a_current_endpoint() {
+fn a_closed_socket_is_known_as_closed_and_never_as_current() {
+    // Same correction as the attempt test above. A connection that has ended
+    // is proof a connection existed, which no snapshot of the present can
+    // supply, so it belongs in the graph. What it must never do is read as
+    // something still open.
     let facts = Stream::new(10)
         .seen("/opt/codex", 501, "testuser")
         .family("codex-cli")
         .socket_closed("203.0.113.10", 443, Direction::Outbound, 750)
         .build();
     let agents = fold(&facts).agents;
-    assert!(
-        agents
-            .first()
-            .is_some_and(|agent| agent.endpoints.is_empty())
+    let agent = agents.first().expect("one agent");
+    assert_eq!(agent.endpoints.len(), 1);
+    assert_eq!(
+        agent.endpoints.first().map(|e| e.sightings.clone()),
+        Some(vec![topgent_core::Sighting::Closed])
     );
     let activity = build_activity(&facts, &agents);
     assert!(activity.events.iter().any(|event| {
@@ -619,4 +641,70 @@ fn a_name_lookup_is_a_question_asked_not_a_destination_reached() {
             .flat_map(|agent| &agent.endpoints)
             .all(|endpoint| endpoint.host != "api.anthropic.com")
     );
+}
+
+#[test]
+fn captured_traffic_keeps_its_protocol_and_counts_packets() {
+    // The two things a capture adds that no socket listing can. A UDP peer is
+    // invisible to the socket collector by its own admission, and a packet
+    // count is traffic that moved rather than a count of times a sweep looked.
+    let facts = Stream::new_at(42, UnixMillis(1_000))
+        .seen("/opt/codex", 501, "testuser")
+        .family("codex-cli")
+        .traffic_observed(topgent_facts::Protocol::Udp, "198.51.100.30", 53, 12)
+        .traffic_observed(topgent_facts::Protocol::Udp, "198.51.100.30", 53, 5)
+        .traffic_observed(topgent_facts::Protocol::Icmp, "203.0.113.10", 0, 4)
+        .build();
+    let agents = fold(&facts).agents;
+    let agent = agents.first().expect("one agent");
+
+    let udp = agent
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.protocol == topgent_facts::Protocol::Udp)
+        .expect("a UDP peer, which is what capture exists to show");
+    assert_eq!(
+        udp.sightings,
+        vec![topgent_core::Sighting::Captured],
+        "packets on the wire are not a held socket"
+    );
+    // Summed, not replaced: each sweep reports the traffic since the last one.
+    assert_eq!(udp.packets, Some(17));
+    assert!(
+        udp.opened_at.is_none() && udp.bytes.is_none(),
+        "a capture times no connection and counts no bytes"
+    );
+
+    let icmp = agent
+        .endpoints
+        .iter()
+        .find(|endpoint| endpoint.protocol == topgent_facts::Protocol::Icmp)
+        .expect("ICMP, which no socket listing reports a destination for");
+    assert_eq!(icmp.packets, Some(4));
+    assert_eq!(icmp.port, 0, "ICMP has no port, and zero here means none");
+}
+
+#[test]
+fn a_capture_and_a_socket_listing_agree_on_one_endpoint() {
+    // Both sources name the same destination with the same protocol, so they
+    // are one endpoint seen two ways rather than two endpoints. Reporting it
+    // twice would double every TCP peer the moment capture was switched on.
+    let facts = Stream::new_at(42, UnixMillis(1_000))
+        .seen("/opt/codex", 501, "testuser")
+        .family("codex-cli")
+        .socket("203.0.113.10", 443, Direction::Outbound)
+        .traffic_observed(topgent_facts::Protocol::Tcp, "203.0.113.10", 443, 30)
+        .build();
+    let agents = fold(&facts).agents;
+    let agent = agents.first().expect("one agent");
+    assert_eq!(agent.endpoints.len(), 1, "{:?}", agent.endpoints);
+    let endpoint = agent.endpoints.first().expect("the endpoint");
+    assert_eq!(
+        endpoint.sightings,
+        vec![
+            topgent_core::Sighting::Held,
+            topgent_core::Sighting::Captured
+        ]
+    );
+    assert_eq!(endpoint.packets, Some(30));
 }

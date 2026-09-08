@@ -4,6 +4,8 @@
 //! each link their own copy of the crate, which splits the coverage profile
 //! across instantiations and reports tested code as untested.
 
+#![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+
 mod activity;
 mod fixtures;
 mod fold;

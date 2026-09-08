@@ -26,6 +26,10 @@ topgent - AI agent security monitor
   topgent events           what changed
   topgent stop <pid>       terminate a process, re-checking its identity first
 
+  topgent --evidence-out PATH   write a signed evidence bundle for this sweep
+  topgent replay <bundle>       score a bundle without touching the host
+  topgent capture status        what deeper network visibility would add, and its price
+
   topgent export cyclonedx [--format json|html] [--output PATH]
   topgent policy check [--input REPORT] [--threshold LEVEL] [--require-coverage]
   topgent evidence explain <claim-id> --bundle PATH
@@ -48,7 +52,7 @@ fn main() {
     // The version a report carries is the one the binary was built from, and a
     // person holding an unmarked download needs a way to ask which that is.
     if args.iter().any(|a| a == "--version" || a == "-V") {
-        println!("topgent {}", env!("CARGO_PKG_VERSION"));
+        println!("topgent {}", topgent_report::version());
         return;
     }
 
@@ -60,12 +64,14 @@ fn main() {
             "events" | "log" => Some(commands::events::events_command(&args)),
             "doctor" => Some(commands::doctor::doctor_command(&args)),
             "evidence" => Some(commands::evidence::evidence_command(&args)),
+            "replay" => Some(commands::replay::replay_command(&args)),
             "lab" => Some(commands::lab::lab_command(&args)),
             "export" => Some(commands::export::export_command(&args)),
             "policy" => Some(commands::policy::policy_command(&args)),
             "rule" => Some(commands::rule::rule_command(&args)),
             "asset" => Some(commands::asset::asset_command(&args)),
             "context" => Some(commands::context::context_command(&args)),
+            "capture" => Some(commands::capture::capture_command(&args)),
             "network" => Some(commands::network::network_command(&args)),
             "approval" => Some(commands::approval::approval_command(&args)),
             _ => None,
@@ -94,6 +100,48 @@ fn main() {
             render::render(show_facts);
             std::thread::sleep(std::time::Duration::from_millis(every.max(200)));
         }
+    }
+
+    // A bundle is a second artefact of the same sweep, so asking for one takes
+    // the path that keeps the sweep rather than running the collectors twice.
+    if let Some(path) = args
+        .iter()
+        .position(|a| a == "--evidence-out")
+        .and_then(|i| args.get(i + 1))
+    {
+        let state = topgent_report::default_state();
+        let (report, bundle) = topgent_report::scan_with_evidence(&state);
+        match bundle {
+            Ok(bundle) => {
+                if let Err(error) = std::fs::write(path, topgent_evidence::Canonical::of(&bundle)) {
+                    eprintln!("topgent: {path}: {error}");
+                    std::process::exit(2);
+                }
+                // The key is printed so the operator can verify the bundle
+                // without asking the process that wrote it for permission.
+                match topgent_report::sensor_key(&state) {
+                    Ok(key) => eprintln!(
+                        "wrote {path}: {} records, verify with --key {}",
+                        bundle.ledger().record_count(),
+                        key.public().to_hex()
+                    ),
+                    Err(error) => {
+                        eprintln!("wrote {path}, but the key could not be printed: {error}");
+                    }
+                }
+            }
+            Err(error) => {
+                eprintln!("topgent: no evidence bundle written: {error}");
+                std::process::exit(2);
+            }
+        }
+        // The table view runs its own sweep, and re-sweeping here would print a
+        // different moment from the one just signed. So this path prints the
+        // report it actually has, or nothing but the summary line above.
+        if json_out {
+            println!("{report}");
+        }
+        return;
     }
 
     if json_out {

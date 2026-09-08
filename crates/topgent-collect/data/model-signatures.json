@@ -1,0 +1,201 @@
+{
+  "schema_version": 1,
+  "source": "topgent-built-in",
+  "max_model_bytes": 128,
+  "reject": [
+    "<synthetic>",
+    "unknown",
+    "default",
+    "null",
+    "none",
+    "auto",
+    "undefined"
+  ],
+  "providers": [
+    {
+      "match": "prefix",
+      "value": "claude",
+      "provider": "anthropic"
+    },
+    {
+      "match": "prefix",
+      "value": "gpt",
+      "provider": "openai"
+    },
+    {
+      "match": "prefix",
+      "value": "o1",
+      "provider": "openai"
+    },
+    {
+      "match": "prefix",
+      "value": "o3",
+      "provider": "openai"
+    },
+    {
+      "match": "prefix",
+      "value": "gemini",
+      "provider": "google"
+    },
+    {
+      "match": "prefix",
+      "value": "llama",
+      "provider": "meta"
+    },
+    {
+      "match": "prefix",
+      "value": "qwen",
+      "provider": "alibaba"
+    },
+    {
+      "match": "prefix",
+      "value": "deepseek",
+      "provider": "deepseek"
+    },
+    {
+      "match": "prefix",
+      "value": "mistral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "grok",
+      "provider": "xai"
+    },
+    {
+      "match": "prefix",
+      "value": "glm",
+      "provider": "zhipu"
+    },
+    {
+      "match": "prefix",
+      "value": "kimi",
+      "provider": "moonshot"
+    }
+  ],
+  "families": [
+    {
+      "family": "claude-code",
+      "default_provider": "anthropic",
+      "sources": [
+        {
+          "kind": "jsonl",
+          "path": ".claude/projects/*/*.jsonl",
+          "key": "model",
+          "certainty": "observed",
+          "note": "The session transcript Claude Code writes while it runs. It records the model that answered, so it survives a config the user overrode at the prompt."
+        },
+        {
+          "kind": "json",
+          "path": ".claude/settings.json",
+          "key": "model",
+          "certainty": "declared",
+          "note": "What the settings file asks for. A per-session override wins over this, which is why the transcript is read first."
+        },
+        {
+          "kind": "argv",
+          "flag": "--model",
+          "certainty": "observed",
+          "note": "Last, because the transcript and the settings file both answer without reading a command line at all."
+        }
+      ]
+    },
+    {
+      "family": "codex-cli",
+      "default_provider": "openai",
+      "sources": [
+        {
+          "kind": "keyvalue",
+          "path": ".codex/config.toml",
+          "key": "model",
+          "certainty": "declared",
+          "note": "One key read as text. No TOML parser is pulled in for a single line, and nothing in the file is evaluated."
+        }
+      ]
+    },
+    {
+      "family": "opencode",
+      "default_provider": "",
+      "sources": [
+        {
+          "kind": "argv",
+          "flag": "--model",
+          "certainty": "observed",
+          "note": "The only place OpenCode states its model. Its config names none and its log is shared by every session on the host, so a model taken from there would be pinned on every OpenCode agent equally. One flag's value is read and nothing else: see flag_value for why that shape is the mitigation rather than a convenience."
+        },
+        {
+          "kind": "json",
+          "path": ".config/opencode/opencode.json",
+          "key": "model",
+          "certainty": "declared"
+        },
+        {
+          "kind": "json",
+          "path": ".config/opencode/opencode.jsonc",
+          "key": "model",
+          "certainty": "declared",
+          "note": "OpenCode routes through a gateway, so its model string names the provider itself, such as openrouter/qwen/qwen3-flash. Its shared log at ~/.local/share/opencode/log/opencode.log does carry model=..., and is deliberately not read: one log serves every session on the host, so a model taken from it would be attributed to every OpenCode agent equally and would be wrong the moment two of them run different models. For this family the model is only on the command line, and reading argv is a decision nobody has taken."
+        }
+      ]
+    },
+    {
+      "family": "gemini-cli",
+      "default_provider": "google",
+      "sources": [
+        {
+          "kind": "json",
+          "path": ".gemini/settings.json",
+          "key": "model",
+          "certainty": "declared"
+        }
+      ]
+    },
+    {
+      "family": "aider",
+      "default_provider": "",
+      "sources": [
+        {
+          "kind": "argv",
+          "flag": "--model",
+          "certainty": "observed",
+          "note": "aider's CLI flag beats its config chain, so it is read first."
+        },
+        {
+          "kind": "keyvalue",
+          "path": ".aider.conf.yml",
+          "key": "model",
+          "certainty": "declared"
+        }
+      ]
+    },
+    {
+      "family": "qwen-code",
+      "default_provider": "alibaba",
+      "sources": [
+        {
+          "kind": "json",
+          "path": ".qwen/settings.json",
+          "key": "model",
+          "certainty": "declared"
+        }
+      ]
+    },
+    {
+      "family": "goose",
+      "default_provider": "",
+      "sources": [
+        {
+          "kind": "keyvalue",
+          "path": ".config/goose/config.yaml",
+          "key": "GOOSE_MODEL",
+          "certainty": "declared"
+        }
+      ]
+    },
+    {
+      "family": "ollama",
+      "default_provider": "meta",
+      "sources": []
+    }
+  ]
+}

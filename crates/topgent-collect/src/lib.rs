@@ -21,12 +21,14 @@
 
 pub mod asset_inventory;
 pub mod attribution;
+pub mod capture;
 pub mod config;
 pub mod container;
 pub mod dns_event;
 pub mod editor;
 pub mod filesystem;
 pub mod intercept;
+pub mod model;
 pub mod network_event;
 pub mod overhead;
 pub mod process;
@@ -131,7 +133,11 @@ pub struct CollectorRun {
     pub fact_count: usize,
     /// Time spent in the probe, rounded to milliseconds.
     pub duration_ms: u64,
-    /// Human-readable failure detail, absent on success.
+    /// What this run has to say in words.
+    ///
+    /// A failure's reason, or on a healthy run whatever the sensor thinks a
+    /// reader needs beyond the fact count. Absent where there is nothing to
+    /// add, which is most sensors most of the time.
     pub detail: Option<String>,
     /// Cumulative events the underlying sensor reports losing, when measurable.
     pub dropped_events: Option<u64>,
@@ -174,6 +180,16 @@ pub trait Collector {
     /// Snapshot collectors and sensors without a trustworthy counter return
     /// `None`; Topgent never estimates this value.
     fn dropped_events(&self) -> Option<u64> {
+        None
+    }
+
+    /// What this healthy run has to say beyond its fact count.
+    ///
+    /// Default `None`, which is most sensors: the fact count is the whole
+    /// story. A sensor that saw more than it could turn into facts says so
+    /// here, because "quiet" and "busy and unable to attribute any of it" are
+    /// different answers that a fact count of zero renders identically.
+    fn detail(&self) -> Option<String> {
         None
     }
 
@@ -242,7 +258,7 @@ pub fn sweep(collectors: &[Box<dyn Collector>], clock: &dyn Clock) -> Sweep {
                     state: CapabilityState::Available,
                     fact_count: facts.len(),
                     duration_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                    detail: None,
+                    detail: c.detail(),
                     dropped_events: c.dropped_events(),
                     boundary: c.boundary(),
                 });
@@ -282,6 +298,7 @@ pub fn default_collectors() -> Vec<Box<dyn Collector>> {
         Box::new(network_event::NetworkEventCollector::default()),
         Box::new(dns_event::DnsEventCollector::default()),
         Box::new(socket::SocketCollector),
+        Box::new(capture::live::CaptureCollector::default()),
         Box::new(config::ConfigCollector::default()),
         Box::new(reach::ReachCollector::default()),
     ]

@@ -12,7 +12,8 @@ use core::fmt;
 /// | 1 | The original vocabulary. |
 /// | 2 | [`crate::Claim::SocketOpen`] carries a [`crate::MatchBasis`]. A socket listing that named an owner without saying how it matched used to render identically to a matched four-tuple. |
 /// | 3 | [`crate::Claim::SubjectNotEvaluated`]. A collector that skipped a subject can say so, so an unexamined agent stops rendering as a clean one. |
-pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion(3);
+/// | 4 | [`crate::Claim::TrafficObserved`]. A packet capture proves traffic moved rather than that a socket existed, and names UDP and ICMP peers that no socket listing reports. |
+pub const SCHEMA_VERSION: SchemaVersion = SchemaVersion(4);
 
 /// Version of the fact schema a record was written against.
 ///

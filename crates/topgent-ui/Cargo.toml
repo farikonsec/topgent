@@ -19,6 +19,7 @@ workspace = true
 
 [dependencies]
 topgent-report = { path = "../topgent-report" }
+topgent-collect = { path = "../topgent-collect" }
 iced = { version = "0.14", features = ["tokio", "advanced", "svg", "image", "lazy"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

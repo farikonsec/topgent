@@ -27,6 +27,12 @@ pub fn cyclonedx(inventory: &Inventory, policy: &Policy, timestamp_ms: u64) -> V
                 "type": component_type(asset.kind),
                 "bom-ref": asset.id.0,
                 "name": asset.name,
+                // The version of an agent asset is the model behind it, which
+                // is what a reader of an AI-BOM is looking for. Explicitly null
+                // when nothing named one, rather than absent: a missing key
+                // reads as an older document, and null reads as "asked, not
+                // established", which is the true answer.
+                "version": asset.version,
                 "properties": properties([
                     ("topgent:asset-kind", asset.kind.as_str()),
                     ("topgent:confidence", asset.confidence.label()),

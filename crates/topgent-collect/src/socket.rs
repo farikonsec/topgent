@@ -29,17 +29,26 @@
 mod collector;
 mod linux;
 mod macos;
+mod proc_net;
 mod row;
 mod windows;
 
 pub use collector::SocketCollector;
 pub use linux::{parse_ss, tcp_info_bytes};
-pub use macos::parse_lsof;
+pub use macos::{parse_lsof, parse_lsof_local};
 pub use row::SocketRow;
+// `fuzzing` as well as `test`: the kernel socket tables are Linux-only, and a
+// parser reachable only on the platform it parses for is a parser nobody
+// fuzzes.
+pub use proc_net::{
+    LocalPort, TableRow, attribute, parse_address, parse_inodes, parse_local_ports, parse_table,
+};
+#[cfg(target_os = "linux")]
+pub use proc_net::{inode_owners, snapshot as proc_net_snapshot};
 // `fuzzing` as well as `test`: a parser reachable only on the platform it
 // parses for is a parser nobody fuzzes.
 #[cfg(any(windows, test, fuzzing))]
 pub use windows::{
     MAX_WINDOWS_CLOCK_SKEW_MS, MAX_WINDOWS_TCP_ROWS, parse_windows_netstat,
-    parse_windows_tcp_connections,
+    parse_windows_netstat_addresses, parse_windows_netstat_local, parse_windows_tcp_connections,
 };

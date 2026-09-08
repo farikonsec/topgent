@@ -313,7 +313,19 @@ pub fn build(agents: &[Agent], policy: &Policy) -> Inventory {
                 name: family.to_owned(),
                 confidence: agent.discovery_confidence,
                 source: "agent_family",
-                version: None,
+                // The model this agent is running, as `provider/model`. An
+                // alias rather than a dated build, because only a provider's
+                // response carries that and Topgent reads neither traffic nor
+                // responses. An AI-BOM that named an agent without naming what
+                // is behind it was leaving out the part somebody reading it
+                // actually wants.
+                version: agent.model.as_ref().map(|(provider, model)| {
+                    if provider.is_empty() {
+                        model.clone()
+                    } else {
+                        format!("{provider}/{model}")
+                    }
+                }),
                 digest: None,
                 installed: false,
                 active: true,

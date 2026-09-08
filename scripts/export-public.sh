@@ -27,6 +27,10 @@ EXCLUDE=(
   "design" # UI mockups as design-canvas artboards. Working material for
            # drawing the interface, referenced by nothing that ships, and of no
            # use to someone reading the code.
+  "lab"    # the agent laboratory: scripts that start real agents against real
+           # providers to prove the sensors on our own machines. They encode a
+           # validation procedure and the conventions of the hosts it runs on,
+           # both of which are ours and neither of which helps a reader.
   "docs"   # the whole working log: lab records, internal ledgers, planning
            # documents and per-sensor evidence, all written for whoever picks
            # the work up next rather than for someone arriving at the project.

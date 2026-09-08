@@ -125,7 +125,7 @@ const GOLDEN_RECORD: &[&str] = &[
     "03",               // coverage snapshot_only
     "00000001",
     "00",   // 1 limitation: confinement_unknown
-    "0003", // fact schema v3
+    "0004", // fact schema v4
     "00000007",
     "70726f63657373",   // subject kind "process"
     "00001092",         // pid 4242
@@ -158,7 +158,7 @@ fn the_pinned_id_survives_a_rebuild() {
     let record = record(1, seen(), vec![Limitation::ConfinementUnknown]);
     assert_eq!(
         record.id().as_str(),
-        "4b37cb7a639cf6ae7014251d13525508b33d5abfc4d730a6dffec26b177996b2"
+        "db086159085ffdb7d277f60c4a7d444e10547b3939846114514d022a2ed66feb"
     );
 }
 

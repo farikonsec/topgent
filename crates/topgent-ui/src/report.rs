@@ -373,6 +373,37 @@ pub async fn export_session(redacted: bool) -> String {
     .await
 }
 
+/// Asks the operating system for packet capture, off the interface thread.
+///
+/// The elevation helper puts a password prompt on screen and blocks until it
+/// is answered. Doing that inside `update` froze the whole window, so the
+/// dialog stayed on screen after the password was accepted and looked as
+/// though nothing had happened. It is blocking work and belongs on a blocking
+/// thread.
+///
+/// Returns whether the capability is now present, and the sentence to show.
+pub async fn grant_capture() -> (bool, String) {
+    use topgent_collect::capture::Granted;
+    let outcome = tokio::task::spawn_blocking(topgent_collect::capture::grant).await;
+    match outcome {
+        Ok(Granted::Yes) => (
+            true,
+            "Packet capture enabled. Restart Topgent to use it.".to_owned(),
+        ),
+        Ok(Granted::Declined) => (false, "Cancelled. Nothing changed.".to_owned()),
+        Ok(Granted::NoChange { detail }) => (
+            false,
+            if detail.is_empty() {
+                "That ran but capture is still unavailable.".to_owned()
+            } else {
+                format!("That ran but capture is still unavailable. {detail}")
+            },
+        ),
+        Ok(Granted::NotAttempted { reason }) => (false, reason),
+        Err(_) => (false, "The elevation thread failed.".to_owned()),
+    }
+}
+
 /// Ask the core to stop one process.
 ///
 /// The interface does not decide anything about this. It sends a pid; the core
@@ -381,6 +412,23 @@ pub async fn export_session(redacted: bool) -> String {
 /// either way. The window between the reader pressing the button and the
 /// signal arriving is where a reused pid would be stopped in place of the
 /// process someone meant, and closing it is the core's job, not this one's.
+///
+/// Set the event log aside, off the drawing thread.
+pub async fn clear_events() -> String {
+    tokio::task::spawn_blocking(topgent_report::clear_event_log)
+        .await
+        .map_or_else(
+            |_| "the clear thread failed".to_owned(),
+            |value| {
+                value
+                    .get("message")
+                    .and_then(serde_json::Value::as_str)
+                    .map_or_else(|| "Event log cleared.".to_owned(), ToOwned::to_owned)
+            },
+        )
+}
+
+/// Ask the core to stop one process.
 ///
 /// Off the drawing thread for the same reason a sweep is: it takes a process
 /// snapshot and blocks.
@@ -523,6 +571,12 @@ pub struct Endpoint {
     pub currently_observed: bool,
     /// Resolved name, where one was available.
     pub dns_name: Option<String>,
+    /// Packets a capture counted moving to or from here.
+    ///
+    /// `None` where no capture ran or none saw this destination. Never zero,
+    /// and never a count of how often a sweep saw the endpoint: those are
+    /// observations, and the difference is the whole point of capturing.
+    pub packets: Option<u64>,
 }
 
 /// One discovered AI asset.

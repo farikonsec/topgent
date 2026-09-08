@@ -46,6 +46,7 @@ impl Encode for Protocol {
             Self::Udp => "udp",
             Self::Icmp => "icmp",
             Self::Other => "other",
+            Self::Unstated => "unstated",
         });
     }
 }
@@ -220,6 +221,23 @@ impl Encode for Claim {
                 direction.encode(into);
                 outcome.encode(into);
             }
+            Self::TrafficObserved {
+                protocol,
+                host,
+                port,
+                direction,
+                packets,
+                first_seen,
+                last_seen,
+            } => {
+                protocol.encode(into);
+                into.text(host);
+                into.u16(*port);
+                direction.encode(into);
+                into.u64(*packets);
+                first_seen.encode(into);
+                last_seen.encode(into);
+            }
             Self::DnsQueryObserved {
                 name,
                 query_type,
@@ -322,6 +340,7 @@ impl Decode for Protocol {
                 ("udp", Self::Udp),
                 ("icmp", Self::Icmp),
                 ("other", Self::Other),
+                ("unstated", Self::Unstated),
             ],
         )
     }

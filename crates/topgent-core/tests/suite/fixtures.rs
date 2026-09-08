@@ -335,6 +335,26 @@ impl Stream {
         })
     }
 
+    /// A capture saw packets to or from a destination.
+    #[must_use]
+    pub fn traffic_observed(
+        self,
+        protocol: topgent_facts::Protocol,
+        host: &str,
+        port: u16,
+        packets: u64,
+    ) -> Self {
+        self.push(Claim::TrafficObserved {
+            protocol,
+            host: host.to_owned(),
+            port,
+            direction: Direction::Outbound,
+            packets,
+            first_seen: topgent_facts::UnixMillis(1_000),
+            last_seen: topgent_facts::UnixMillis(2_000),
+        })
+    }
+
     /// It declares a connector.
     #[must_use]
     pub fn connector(self, name: &str, access: Access) -> Self {

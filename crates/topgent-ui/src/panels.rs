@@ -166,7 +166,12 @@ pub fn view<'a>(
 /// Once the eye moved into the data, a network table and an event table had no
 /// local identity. This compact heading keeps the evidence grounded without
 /// taking a dashboard-sized band away from it.
-pub fn heading<'a>(panel: Panel, agent: Option<&Agent>, s: Style) -> Element<'a, Message> {
+pub fn heading<'a>(
+    panel: Panel,
+    agent: Option<&Agent>,
+    notice: Option<&str>,
+    s: Style,
+) -> Element<'a, Message> {
     let p = s.palette;
     let selected = agent.map_or_else(
         || "No agent selected".to_owned(),
@@ -190,6 +195,18 @@ pub fn heading<'a>(panel: Panel, agent: Option<&Agent>, s: Style) -> Element<'a,
             ]
             .spacing(s.pad(space::HAIR)),
             iced::widget::space().width(Length::Fill),
+            // What the last clear did, kept beside the control that did it so
+            // an operator can see where the old log went without hunting.
+            text(notice.unwrap_or_default().to_owned())
+                .size(s.type_size(size::MICRO))
+                .color(p.faint),
+            // Only on the event log, because it is the only panel with a
+            // record of its own to set aside.
+            if matches!(panel, Panel::Events) {
+                clear_button(s)
+            } else {
+                iced::widget::space().width(Length::Shrink).into()
+            },
             text(if host_wide {
                 "Host wide".to_owned()
             } else {
@@ -199,10 +216,49 @@ pub fn heading<'a>(panel: Panel, agent: Option<&Agent>, s: Style) -> Element<'a,
             .size(s.type_size(size::MICRO))
             .color(p.faint),
         ]
+        .spacing(s.pad(space::SNUG))
         .align_y(iced::Alignment::Center),
     )
     .padding([s.pad(space::SNUG), s.pad(space::BASE)])
     .width(Length::Fill)
+    .into()
+}
+
+/// The control that starts a fresh event log.
+///
+/// Labelled for what it does. It archives rather than deletes, so one press is
+/// enough and no confirmation is owed: nothing is lost, and a dialog in front
+/// of a reversible action teaches people to click through dialogs.
+fn clear_button<'a>(s: Style) -> Element<'a, Message> {
+    let p = s.palette;
+    iced::widget::button(
+        text("Clear log")
+            .font(theme::STRONG)
+            .size(s.type_size(size::MICRO))
+            .color(p.muted),
+    )
+    .on_press(Message::ClearEvents)
+    .style(move |_, status| iced::widget::button::Style {
+        background: Some(
+            if matches!(
+                status,
+                iced::widget::button::Status::Hovered | iced::widget::button::Status::Pressed
+            ) {
+                p.hover()
+            } else {
+                p.background
+            }
+            .into(),
+        ),
+        text_color: p.muted,
+        border: iced::Border {
+            color: p.border,
+            width: 1.0,
+            radius: theme::radius::CONTROL.into(),
+        },
+        ..iced::widget::button::Style::default()
+    })
+    .padding([s.pad(space::HAIR), s.pad(space::SNUG)])
     .into()
 }
 
@@ -370,6 +426,13 @@ fn network<'a>(
                 } else {
                     e.port.to_string()
                 }),
+                // Packets a capture counted. A dash is not zero: it means no
+                // capture saw this endpoint, and an endpoint with real traffic
+                // must never render the same as one nothing was watching.
+                e.packets.map_or_else(
+                    || table::Cell::tinted("-".to_owned(), s.palette.faint),
+                    |packets| table::Cell::new(packets.to_string()),
+                ),
                 // The flag never appears without the code beside it. A glyph
                 // is not a fact and must not be the only carrier of one.
                 // An address the table does not cover reads faint, so a row
@@ -410,6 +473,13 @@ fn network<'a>(
                     },
                 ),
                 (
+                    "packets".to_owned(),
+                    e.packets.map_or_else(
+                        || "no capture saw this endpoint".to_owned(),
+                        |packets| packets.to_string(),
+                    ),
+                ),
+                (
                     "seen now".to_owned(),
                     if e.currently_observed {
                         "yes"
@@ -431,11 +501,12 @@ fn network<'a>(
     )
 }
 
-static NETWORK: [table::Column2; 8] = [
+static NETWORK: [table::Column2; 9] = [
     table::Column2::text("HOST", 5),
     table::Column2::text("PROTO", 1),
     table::Column2::text("ADDRESS", 4).mono(),
     table::Column2::text("PORT", 1).number().mono(),
+    table::Column2::text("PACKETS", 1).number().mono(),
     table::Column2::text("COUNTRY", 2),
     table::Column2::text("NETWORK", 5),
     table::Column2::text("DIRECTION", 2),

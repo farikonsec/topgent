@@ -62,9 +62,16 @@ Reachability is an answer about the **account**. A confined process under the sa
 - ✍️ **Tamper-evident bundles, verified by something else.** Records are content-addressed and chained; checkpoints are Ed25519-signed. `topgent-verify` checks a bundle offline against a key you already hold and depends on nothing that produced it. Twenty-one modelled attacks each fail with a named reason.
 - 🎚️ **Quality and coverage on every claim.** How well an observation was tied to its subject, and what the collector could not have seen, are separate values. `exact` beside `snapshot_only` is common and does not mean complete.
 - 🚫 **A band for what was never evaluated.** An agent Topgent could not examine is graded `NOT EVALUATED` with the reason, not scored zero and coloured green.
+- 🧠 **Which model an agent is using.** Read from the agent's own session files, configuration and command line, driven by a signature catalogue rather than code. Twelve providers and eight agent families, and adding one is a JSON entry.
+- 📡 **Packet capture, on all three platforms.** Optional and off until granted. It shows what a socket listing cannot: UDP peers, ICMP, connections that open and close between two sweeps, and traffic volume per endpoint. Headers only.
+- 🔐 **One small binary holds the privilege.** `topgent-capture` reads frames and prints them; the interface reads its output and holds no capability at all. The same separation Wireshark uses for `dumpcap`.
+- 🛰️ **Port scans, reported honestly.** Twenty distinct ports on one host in an interval is a scan. Its connections are refused, so no socket exists to attribute them through, and the finding says so rather than guessing at a process.
+- 🧹 **A fresh event log on request.** The old one is renamed and kept. A security log is not deleted because somebody wanted a clear view.
 - 🔒 **Metadata collection only.** Does not collect prompts, file contents, payloads, or decrypted TLS traffic.
 
 <div align="center">
+
+<img src="assets/screenshots/06-capture-and-models.png" width="100%" alt="Packet capture on, the model each agent is using, and the event log">
 
 <img src="assets/screenshots/02-risk-and-blast-radius.png" width="100%" alt="Risk factors and blast radius">
 
@@ -105,6 +112,64 @@ Symlinks are followed before matching. Package managers install a link in `bin/`
 Definitions are data in [`agent-families.json`](crates/topgent-collect/data/agent-families.json). A new one needs a matching fixture and a non-matching decoy. An unmarked cell has not completed its verification run and matches on basename alone.
 
 Cline, Roo Code, and Continue run in one editor process. Topgent reports that process and its active extensions. It does not attribute activity to an individual extension.
+
+## Models detected
+
+Which model an agent is using is read from what the agent already writes down:
+its session files, its configuration, and its command line. The rules are a
+signature catalogue, not code, so a new agent or a new provider is a JSON entry
+rather than a release.
+
+| Provider | Matched on |
+|---|---|
+| Anthropic | `claude…` |
+| OpenAI | `gpt…`, `o1…`, `o3…` |
+| Google | `gemini…` |
+| Meta | `llama…` |
+| Alibaba | `qwen…` |
+| DeepSeek | `deepseek…` |
+| Mistral | `mistral…` |
+| xAI | `grok…` |
+| Zhipu | `glm…` |
+| Moonshot | `kimi…` |
+
+Sources are tried in order per family: Claude Code from its session log, then
+its settings, then its command line; OpenCode from its command line first;
+Codex CLI from its configuration. A model named on the command line is recorded
+as observed; one read from a configuration file is recorded as declared, because
+a file says what was asked for and not what was used.
+
+Nothing is inferred from a process name. An agent whose model cannot be
+established shows no model rather than a guess.
+
+## Packet capture
+
+Off until granted, and granted separately on each platform. Nothing is captured
+before the grant and nothing but headers after it: the read buffer holds the
+front of each frame and the kernel discards the rest, so no payload reaches the
+process at all.
+
+| Platform | What it needs | How |
+|---|---|---|
+| Linux | `CAP_NET_RAW` on the helper | `sudo setcap cap_net_raw,cap_net_admin+eip ./topgent-capture` |
+| macOS | Read access to `/dev/bpf*` | The `ChmodBPF` helper shipped with Wireshark |
+| Windows | The Npcap driver | Npcap's own signed installer |
+
+Topgent installs no driver and changes no permission on anybody's behalf. The
+interface shows the exact step and the command that undoes it.
+
+Only `topgent-capture` holds the capability. It reads frames, prints them, and
+exits when whatever started it goes away. On Linux the grant goes on that binary
+and not on the interface, which is the arrangement Wireshark uses for `dumpcap`
+and for the same reason: the large, frequently changed program is exactly the
+one that should not hold a raw socket.
+
+Attribution is a join, not a read. A packet carries no process id on any
+operating system, so the local port comes off the packet and the socket table
+says who holds it. The map is rebuilt inside the capture loop rather than at the
+sweep, so a socket that lived forty milliseconds is still there to be found.
+Below that, the frame is counted and reported as unattributed rather than
+pinned on whichever process took the port next.
 
 ## Install
 
@@ -221,7 +286,10 @@ topgent export cyclonedx --format html --output topgent-aibom.html
 
 ## Limits
 
-- Does not read prompts, responses, file contents or packet payloads, and does not decrypt TLS.
+- Does not read prompts, responses, file contents or packet payloads, and does not decrypt TLS. With capture on, the buffer holds headers only and the kernel discards the rest of each frame.
+- Does not name the process behind a port scan. Its connections are refused, so no socket exists for any snapshot to attribute them through, at any refresh rate. The traffic is reported against the host probed, marked unattributed, with the reason.
+- Does not show packet counts in a single command-line run. Capture starts with the sweep that asks for it, so the first sweep has nothing to report by construction. Use the window, or `topgent --watch`.
+- Does not keep the Linux capability across an upgrade. File capabilities live on the file, so a new binary is a new grant.
 - Does not block pre-execution actions on macOS or Windows.
 - Does not distinguish individual agent extensions in a shared editor process.
 - Does not name the destination of a raw ICMP socket. macOS exposes none to a socket listing; Linux needs `sendto` in the audit rules.

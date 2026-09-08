@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 7,
   "source": "topgent-built-in",
   "factors": [
     {
@@ -13,7 +13,11 @@
       "atlas_description": "Evade sandboxing / act beyond declared confinement",
       "sensor": "socket",
       "verification": "automated",
-      "coverage_ceiling": "degraded"
+      "coverage_ceiling": "degraded",
+      "requires": {
+        "is": "is_sandboxed"
+      },
+      "maturity": "stable"
     },
     {
       "code": "RECON_FANOUT",
@@ -24,7 +28,28 @@
       "atlas_id": "AML.T0007",
       "atlas_description": "Discovery: scanning for reachable services",
       "sensor": "socket",
-      "verification": "live"
+      "verification": "live",
+      "firing": {
+        "any": [
+          {
+            "at_least": [
+              "distinct_hosts",
+              {
+                "threshold": "recon_hosts"
+              }
+            ]
+          },
+          {
+            "at_least": [
+              "max_ports_to_one_host",
+              {
+                "threshold": "recon_ports"
+              }
+            ]
+          }
+        ]
+      },
+      "maturity": "stable"
     },
     {
       "code": "ARBITRARY_EXECUTION",
@@ -35,7 +60,11 @@
       "atlas_id": "AML.T0050",
       "atlas_description": "Command and scripting interpreter",
       "sensor": "config",
-      "verification": "automated"
+      "verification": "automated",
+      "firing": {
+        "is": "can_execute"
+      },
+      "maturity": "stable"
     },
     {
       "code": "BROAD_WRITE",
@@ -46,7 +75,11 @@
       "atlas_id": "AML.T0052",
       "atlas_description": "Persistence / tampering via broad file write",
       "sensor": "config",
-      "verification": "automated"
+      "verification": "automated",
+      "firing": {
+        "is": "can_write_broadly"
+      },
+      "maturity": "stable"
     },
     {
       "code": "UNRESTRICTED_NETWORK",
@@ -57,30 +90,61 @@
       "atlas_id": "AML.T0072",
       "atlas_description": "Unrestricted exfiltration channel",
       "sensor": "socket",
-      "verification": "live"
+      "verification": "live",
+      "firing": {
+        "at_least": [
+          "outbound_count",
+          {
+            "threshold": "network_spread"
+          }
+        ]
+      },
+      "maturity": "stable"
     },
     {
       "code": "SECRET_REACHABLE",
-      "points": 15,
-      "subsequent_points": 12,
-      "description": "A credential is readable by this agent (first is worth more).",
+      "points": 6,
+      "subsequent_points": 2,
+      "description": "A credential is readable by this agent. Reachability is a property of the account, so it is context rather than behaviour and is capped: the first is the finding, the tenth says nothing new.",
       "remedy": "Move the credential where this owner cannot read it",
       "remedy_where": "filesystem",
       "atlas_id": "AML.T0055",
       "atlas_description": "Unsecured credentials within reach",
       "sensor": "reach",
-      "verification": "live"
+      "verification": "live",
+      "firing": {
+        "at_least": [
+          "latent_secret_count",
+          1
+        ]
+      },
+      "maturity": "stable",
+      "max_points": 12
     },
     {
       "code": "EXFILTRATION_PATH",
-      "points": 12,
+      "points": 8,
       "description": "Shell plus a reachable credential is a complete path out.",
       "remedy": "Break the chain: deny shell, or move the credential out of reach",
       "remedy_where": "agent config",
       "atlas_id": "AML.T0025",
       "atlas_description": "Exfiltration via a reachable credential and outbound path",
       "sensor": "reach",
-      "verification": "automated"
+      "verification": "automated",
+      "firing": {
+        "all": [
+          {
+            "is": "can_execute"
+          },
+          {
+            "at_least": [
+              "latent_secret_count",
+              1
+            ]
+          }
+        ]
+      },
+      "maturity": "stable"
     },
     {
       "code": "AGENT_CHAIN",
@@ -91,7 +155,14 @@
       "atlas_id": "AML.T0053",
       "atlas_description": "Lateral movement to another agent",
       "sensor": "config",
-      "verification": "automated"
+      "verification": "automated",
+      "firing": {
+        "at_least": [
+          "invokes_count",
+          1
+        ]
+      },
+      "maturity": "stable"
     },
     {
       "code": "DECLARATION_DRIFT",
@@ -102,7 +173,14 @@
       "atlas_id": "AML.T0051",
       "atlas_description": "Access beyond declared scope",
       "sensor": "filesystem_events",
-      "verification": "unavailable"
+      "verification": "unavailable",
+      "firing": {
+        "at_least": [
+          "drift_count",
+          1
+        ]
+      },
+      "maturity": "stable"
     },
     {
       "code": "WATCHLIST",
@@ -115,7 +193,15 @@
       "atlas_description": "Matched a rule you defined",
       "sensor": "reach",
       "verification": "degraded",
-      "coverage_ceiling": "degraded"
+      "coverage_ceiling": "degraded",
+      "requires": {
+        "at_least": [
+          "resource_count",
+          1
+        ]
+      },
+      "maturity": "stable",
+      "technique_absent_reason": "The operator defines what this watches, so the technique it would map to depends on the rule rather than on the factor. Left unmapped deliberately rather than tied to a technique that would be wrong for most rules."
     },
     {
       "code": "EXPOSED_LISTENER",
@@ -126,7 +212,28 @@
       "atlas_id": "T1090",
       "atlas_description": "Proxy or backdoor listener exposed",
       "sensor": "socket",
-      "verification": "live"
+      "verification": "live",
+      "maturity": "stable",
+      "per_item": {
+        "of": "endpoints",
+        "where": {
+          "all": [
+            {
+              "is": "listening"
+            },
+            {
+              "is": "held"
+            },
+            {
+              "not": {
+                "is": "loopback"
+              }
+            }
+          ]
+        },
+        "title": "Opened a listener on {host}:{port}",
+        "source": "live listening socket exposed beyond loopback"
+      }
     },
     {
       "code": "OFFENSIVE_TOOL",
@@ -137,7 +244,17 @@
       "atlas_id": "T1059",
       "atlas_description": "Command and scripting tool execution",
       "sensor": "process",
-      "verification": "live"
+      "verification": "live",
+      "maturity": "stable",
+      "per_item": {
+        "of": "children",
+        "where": {
+          "is": "offensive_tool"
+        },
+        "first_only": true,
+        "title": "Spawned offensive tooling: {name}",
+        "source": "child pid {pid}, depth {depth}"
+      }
     },
     {
       "code": "PROCESS_EXPLOSION",
@@ -148,7 +265,16 @@
       "atlas_id": "T1106",
       "atlas_description": "Abnormal process execution fan-out",
       "sensor": "process",
-      "verification": "automated"
+      "verification": "automated",
+      "firing": {
+        "at_least": [
+          "children_count",
+          {
+            "threshold": "process_children"
+          }
+        ]
+      },
+      "maturity": "stable"
     },
     {
       "code": "SUSPICIOUS_ENDPOINT",
@@ -159,7 +285,29 @@
       "atlas_id": "T1071",
       "atlas_description": "Suspicious command-and-control endpoint",
       "sensor": "socket",
-      "verification": "live"
+      "verification": "live",
+      "maturity": "stable",
+      "per_item": {
+        "of": "endpoints",
+        "where": {
+          "all": [
+            {
+              "is": "outbound"
+            },
+            {
+              "is": "raw_address"
+            },
+            {
+              "in_list": [
+                "port",
+                "suspicious_ports"
+              ]
+            }
+          ]
+        },
+        "title": "Raw address on unusual port {port}",
+        "source": "{host}:{port} has no DNS name in the socket metadata"
+      }
     },
     {
       "code": "PRIVATE_PEER",
@@ -170,7 +318,28 @@
       "atlas_id": "T1021",
       "atlas_description": "Remote services / lateral movement",
       "sensor": "socket",
-      "verification": "live"
+      "verification": "live",
+      "maturity": "stable",
+      "per_item": {
+        "of": "endpoints",
+        "where": {
+          "all": [
+            {
+              "is": "outbound"
+            },
+            {
+              "is": "private_peer"
+            },
+            {
+              "not": {
+                "is": "loopback"
+              }
+            }
+          ]
+        },
+        "title": "Reached another host on the private network",
+        "source": "outbound connection to {host}:{port}"
+      }
     },
     {
       "code": "METADATA_SERVICE",
@@ -178,10 +347,26 @@
       "description": "The agent contacted a cloud instance metadata service.",
       "remedy": "Block instance-metadata access unless this agent explicitly requires it",
       "remedy_where": "the agent's live sockets",
-      "atlas_id": "",
-      "atlas_description": "",
+      "atlas_id": "T1552.005",
+      "atlas_description": "Unsecured credentials: cloud instance metadata API",
       "sensor": "socket",
-      "verification": "automated"
+      "verification": "automated",
+      "maturity": "stable",
+      "per_item": {
+        "of": "endpoints",
+        "where": {
+          "all": [
+            {
+              "is": "outbound"
+            },
+            {
+              "is": "metadata_service"
+            }
+          ]
+        },
+        "title": "Contacted a cloud instance metadata service",
+        "source": "outbound connection to {host}:{port}"
+      }
     },
     {
       "code": "CREDENTIAL_ACCESS",
@@ -192,7 +377,23 @@
       "atlas_id": "T1555",
       "atlas_description": "Credentials accessed from local stores",
       "sensor": "filesystem_events",
-      "verification": "unavailable"
+      "verification": "unavailable",
+      "maturity": "stable",
+      "per_item": {
+        "of": "resources",
+        "where": {
+          "all": [
+            {
+              "is": "observed"
+            },
+            {
+              "is": "sensitive"
+            }
+          ]
+        },
+        "title": "Credential actually opened: {path}",
+        "source": "observed filesystem access, not inferred reachability"
+      }
     },
     {
       "code": "PERSISTENCE_WRITE",
@@ -203,7 +404,26 @@
       "atlas_id": "T1543",
       "atlas_description": "Persistence through startup configuration",
       "sensor": "filesystem_events",
-      "verification": "unavailable"
+      "verification": "unavailable",
+      "maturity": "stable",
+      "per_item": {
+        "of": "resources",
+        "where": {
+          "all": [
+            {
+              "is": "observed"
+            },
+            {
+              "is": "mutating"
+            },
+            {
+              "is": "persistence_location"
+            }
+          ]
+        },
+        "title": "Wrote a persistence location: {path}",
+        "source": "observed mutating filesystem access"
+      }
     },
     {
       "code": "SELF_TAMPERING",
@@ -214,7 +434,26 @@
       "atlas_id": "T1562",
       "atlas_description": "Impair defenses by modifying the monitor",
       "sensor": "filesystem_events",
-      "verification": "unavailable"
+      "verification": "unavailable",
+      "maturity": "stable",
+      "per_item": {
+        "of": "resources",
+        "where": {
+          "all": [
+            {
+              "is": "observed"
+            },
+            {
+              "is": "mutating"
+            },
+            {
+              "is": "topgent_owned"
+            }
+          ]
+        },
+        "title": "Modified Topgent or its policy",
+        "source": "{path}"
+      }
     },
     {
       "code": "DISALLOWED_ASSET",
@@ -225,7 +464,24 @@
       "atlas_id": "T1204",
       "atlas_description": "Use of a locally disallowed component",
       "sensor": "config",
-      "verification": "automated"
+      "verification": "automated",
+      "requires": {
+        "any": [
+          {
+            "at_least": [
+              "endpoint_count",
+              1
+            ]
+          },
+          {
+            "at_least": [
+              "connector_count",
+              1
+            ]
+          }
+        ]
+      },
+      "maturity": "stable"
     }
   ]
 }

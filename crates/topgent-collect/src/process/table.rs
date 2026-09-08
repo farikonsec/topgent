@@ -122,6 +122,14 @@ pub fn snapshot() -> Vec<ProcInfo> {
         // the pid visible until its parent reaps it; treating that shell as a
         // live identity makes guarded termination falsely escalate to SIGKILL.
         .filter(|(_, p)| !matches!(p.status(), ProcessStatus::Dead | ProcessStatus::Zombie))
+        // A thread is not a child process. Linux exposes both through the same
+        // interface and sysinfo returns both, so without this every agent built
+        // on a threaded runtime looks like a fork bomb: one OpenCode agent
+        // reported 48 descendants, of which 47 were its own `HeapHelper`
+        // threads and exactly one was a real child. `PROCESS_EXPLOSION` then
+        // fired on every agent on the host, including the ones doing nothing,
+        // which is worse than the factor not existing.
+        .filter(|(_, p)| p.thread_kind().is_none())
         .map(|(pid, p)| {
             let name = p.name().to_string_lossy().to_string();
             let system_path = p.exe().map(resolved);

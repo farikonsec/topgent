@@ -34,7 +34,9 @@ pub(crate) mod activity;
 pub(crate) mod agents;
 pub(crate) mod context;
 pub(crate) mod events;
+pub mod evidence;
 pub(crate) mod health;
+pub mod identity;
 pub(crate) mod legend;
 pub(crate) mod network;
 pub(crate) mod response;
@@ -43,9 +45,17 @@ pub(crate) mod scan;
 mod test_support;
 
 pub use actions::{
-    add_rule, clear_semantic_context, export_session, remove_rule, reset_network_baseline,
-    resolve_termination_approval, set_asset_disposition, set_rule_response, set_semantic_enabled,
-    stop,
+    add_rule, clear_event_log, clear_semantic_context, export_session, remove_rule,
+    reset_network_baseline, resolve_termination_approval, set_asset_disposition, set_rule_response,
+    set_semantic_enabled, stop,
 };
-pub use scan::{cyclonedx_from_report, cyclonedx_scan, now_ms, scan};
+pub use evidence::{
+    ProduceError, RULE_CATALOGUE_VERSION, attach_claims, bundle_from_sweep, coverage_for,
+    limitations_for, redaction_gate,
+};
+pub use identity::{BootBinding, IdentityError, default_state, origin_at, sensor_key};
+pub use scan::{
+    Observed, REPLAY_CONTRACT_VERSION, collector_version, cyclonedx_from_report, cyclonedx_scan,
+    now_ms, observe, replay, report_from_sweep, scan, scan_with_evidence, simulate, version,
+};
 pub use topgent_journal::state_dir;

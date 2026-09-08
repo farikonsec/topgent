@@ -62,6 +62,31 @@ pub fn clear_semantic_context() -> Value {
     }
 }
 
+/// Set the event log aside so the view starts fresh.
+///
+/// Not a delete. The log is renamed with the time it was cleared and a new one
+/// starts, which is what every log rotation does. An operator clearing a view
+/// is asking for a fresh page, not asking to destroy a security record, and a
+/// tool that quietly did the second when asked for the first would be the
+/// wrong tool.
+#[must_use]
+pub fn clear_event_log() -> Value {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX));
+    match Journal::open_default().archive(at) {
+        Ok(Some(path)) => json!({
+            "ok": true,
+            "message": format!("Event log cleared. The old one is kept at {}", path.display()),
+        }),
+        Ok(None) => json!({ "ok": true, "message": "There was no event log to clear." }),
+        Err(error) => json!({
+            "ok": false,
+            "message": format!("The event log could not be cleared: {error}"),
+        }),
+    }
+}
+
 /// Reset the network baseline for one exact, currently running agent instance.
 ///
 /// Both PID and process start time must still match the live process. This
@@ -462,6 +487,7 @@ mod tests {
             first_seen: 2_000,
             last_seen: 3_000,
             observations: 2,
+            packets: None,
             sample_times: vec![2_000, 3_000],
             currently_observed: false,
             last_visibility_change: 3_000,

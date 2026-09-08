@@ -67,7 +67,32 @@ pub(crate) fn identity_evidence(a: &Agent) -> Value {
     })
 }
 
-pub(crate) fn agent_json((a, r): &(Agent, Risk), policy: &Policy, generated_at: u64) -> Value {
+/// Whether a projection may ask the network what an address is called.
+///
+/// A live report resolves, because a reader wants a name. A replay must not:
+/// the lookup reaches a resolver, which means the same bundle projects
+/// differently depending on where and when it is replayed and on whether `dig`
+/// is installed. That is exactly what happened between macOS and Linux, where
+/// one printed `localhost` and the other `127.0.0.1` for the same record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Naming {
+    /// Ask the resolver. Live paths only.
+    Resolved,
+    /// Print the address as recorded, and look nothing up.
+    Literal,
+}
+
+pub(crate) fn agent_json(scored: &(Agent, Risk), policy: &Policy, generated_at: u64) -> Value {
+    agent_json_named(scored, policy, generated_at, Naming::Resolved)
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn agent_json_named(
+    (a, r): &(Agent, Risk),
+    policy: &Policy,
+    generated_at: u64,
+    naming: Naming,
+) -> Value {
     let asset_id = agent_asset_id(a);
     let asset_disposition = policy.asset_disposition(&asset_id.0, a.family.as_deref());
     json!({
@@ -96,7 +121,17 @@ pub(crate) fn agent_json((a, r): &(Agent, Risk), policy: &Policy, generated_at: 
         } else {
             "Behavior and response are attributed to the shared editor host; Topgent does not claim which active extension caused a host-level event."
         },
-        "model": a.model.as_ref().map(|(p, m)| format!("{p}/{m}")),
+        // A gateway-routed string already names its own route, such as
+        // `openrouter/qwen/qwen3-flash`, and prefixing the derived provider
+        // onto it produced `alibaba/openrouter/qwen/qwen3-flash`, which reads
+        // like four things and is one.
+        "model": a.model.as_ref().map(|(provider, model)| {
+            if model.contains('/') || provider.is_empty() {
+                model.clone()
+            } else {
+                format!("{provider}/{model}")
+            }
+        }),
         "discovery_confidence": a.discovery_confidence.label(),
         "score": r.score,
         "grade": r.grade.label(),
@@ -135,7 +170,10 @@ pub(crate) fn agent_json((a, r): &(Agent, Risk), policy: &Policy, generated_at: 
             "evidence": res.evidence,
         })).collect::<Vec<_>>(),
         "endpoints": a.endpoints.iter().map(|e| {
-            let (name, owner) = resolve::label(&e.host);
+            let (name, owner) = match naming {
+                Naming::Resolved => resolve::label(&e.host),
+                Naming::Literal => (e.host.clone(), None),
+            };
             json!({
                 "protocol": e.protocol.as_str(),
                 // Whether the platform could have named a peer here at all.
@@ -144,6 +182,11 @@ pub(crate) fn agent_json((a, r): &(Agent, Risk), policy: &Policy, generated_at: 
                 // the two apart.
                 "peer_observable": e.protocol.peer_observable() && e.host != "*",
                 "host": e.host,
+                // How this destination was seen. An endpoint with only
+                // `attempted` is one no sweep caught a socket for, which is
+                // exactly the fast connection a snapshot cannot report, and a
+                // reader must be able to tell it from a live one.
+                "sightings": e.sightings.iter().map(|s| s.as_str()).collect::<Vec<_>>(),
                 "name": name,
                 "owner": owner,
                 "port": e.port,
@@ -160,6 +203,10 @@ pub(crate) fn agent_json((a, r): &(Agent, Risk), policy: &Policy, generated_at: 
                 // count of how often a sweep saw the endpoint.
                 "bytes_sent": e.bytes.map(|bytes| bytes.sent),
                 "bytes_received": e.bytes.map(|bytes| bytes.received),
+                // Packets a capture counted moving to or from here. Absent
+                // where no capture ran or none saw this destination: never
+                // zero, and never a byte volume, which nothing here measures.
+                "packets": e.packets,
             })
         }).collect::<Vec<_>>(),
         "connectors": a.connectors.iter().map(|c| json!({
@@ -226,26 +273,32 @@ mod tests {
             Endpoint {
                 protocol: topgent_facts::Protocol::Tcp,
                 bytes: None,
+                packets: None,
                 host: "52.123.242.66".to_owned(),
                 port: 443,
                 direction: Direction::Outbound,
                 opened_at: Some(UnixMillis(4_000)),
+                sightings: vec![topgent_core::Sighting::Held],
             },
             Endpoint {
                 protocol: topgent_facts::Protocol::Tcp,
                 bytes: None,
+                packets: None,
                 host: "github.com".to_owned(),
                 port: 443,
                 direction: Direction::Outbound,
                 opened_at: None,
+                sightings: vec![topgent_core::Sighting::Held],
             },
             Endpoint {
                 protocol: topgent_facts::Protocol::Tcp,
                 bytes: None,
+                packets: None,
                 host: "10.0.0.1".to_owned(),
                 port: 443,
                 direction: Direction::Outbound,
                 opened_at: Some(UnixMillis(generated_at + 5_000)),
+                sightings: vec![topgent_core::Sighting::Held],
             },
         ];
         let risk = Risk {

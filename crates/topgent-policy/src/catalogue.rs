@@ -24,10 +24,14 @@
 //! produces a lower score, and a lower score reads as safety.
 
 use serde::Deserialize;
+
+use crate::Thresholds;
+use crate::firing::{Firing, Signals};
+use crate::item::{ItemCondition, ItemKind, Template, TemplateError};
 use std::collections::BTreeSet;
 use std::sync::OnceLock;
 
-const SCHEMA_VERSION: u16 = 1;
+const SCHEMA_VERSION: u16 = 7;
 const BUILTIN_JSON: &str = include_str!("../data/risk-factors.json");
 static BUILTIN: OnceLock<Result<Catalogue, String>> = OnceLock::new();
 
@@ -58,6 +62,54 @@ pub const KNOWN_CODES: [&str; 20] = [
     "DISALLOWED_ASSET",
 ];
 
+/// How ready a factor is to be relied on, which is not the same question as
+/// whether it has been verified.
+///
+/// [`FactorEntry::verification`] says how a factor was last *shown* to work.
+/// This says whether it is safe to have switched **on**. The two come apart
+/// constantly: a factor can be verified against a fixture and still be too
+/// noisy to enable, and a factor can be obviously correct and never yet have
+/// been run against a real agent. Collapsing them into one field is how a
+/// tool ends up either shipping experiments as though they were finished or
+/// withholding finished work because a lab run is outstanding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Maturity {
+    /// An experiment. May be removed or changed without notice.
+    Sandbox,
+    /// Believed useful, not yet shaped by real use.
+    Experimental,
+    /// Shaped by use, still subject to change.
+    Incubating,
+    /// Expected to keep working and keep meaning what it means.
+    Stable,
+    /// Kept for compatibility; will be removed.
+    Deprecated,
+}
+
+impl Maturity {
+    /// The wire name.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Sandbox => "sandbox",
+            Self::Experimental => "experimental",
+            Self::Incubating => "incubating",
+            Self::Stable => "stable",
+            Self::Deprecated => "deprecated",
+        }
+    }
+
+    /// Whether a fresh install loads this without being asked.
+    ///
+    /// Only `stable`. Everything else is opt-in, so an operator is never
+    /// surprised by a finding from something the project has not committed to.
+    #[must_use]
+    pub const fn on_by_default(self) -> bool {
+        matches!(self, Self::Stable)
+    }
+}
+
 /// Everything known about one factor.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,6 +121,20 @@ pub struct FactorEntry {
     /// Points for each occurrence after the first, where a factor can recur.
     #[serde(default)]
     pub subsequent_points: Option<u32>,
+    /// The most this factor may contribute in total, however often it recurs.
+    ///
+    /// Only meaningful for a factor that can occur many times for one agent.
+    /// Without it, a property of the *machine* becomes a score about the
+    /// *agent*: every agent an account owns can reach exactly the same
+    /// credentials, so a home directory holding ten of them added the same
+    /// large number to every agent on the host and no behaviour could be seen
+    /// above it. The first occurrence is the finding; the tenth says nothing
+    /// new about the agent.
+    ///
+    /// Occurrences past the ceiling are still reported. They are worth zero
+    /// points, so the list stays complete and the number stays honest.
+    #[serde(default)]
+    pub max_points: Option<u32>,
     /// Whether an operator may change the points in their own policy.
     ///
     /// Two factors are fixed: a sandbox escape and a critical watchlist match
@@ -88,6 +154,17 @@ pub struct FactorEntry {
     pub atlas_description: String,
     /// Which sensor has to be working for this factor to be detectable at all.
     pub sensor: String,
+    /// Why this factor maps to no published technique, when it maps to none.
+    ///
+    /// Present only where the absence is deliberate. A factor whose technique
+    /// depends on a rule the operator wrote cannot be tied to one in advance,
+    /// and inventing a mapping that is wrong for most rules would be worse than
+    /// admitting there is none. Its presence is what lets the lint tell a
+    /// deliberate gap from an oversight.
+    #[serde(default)]
+    pub technique_absent_reason: Option<String>,
+    /// Whether it is safe to have this switched on. See [`Maturity`].
+    pub maturity: Maturity,
     /// How the factor was last shown to work.
     ///
     /// `live` means against a real agent on a real host, `automated` against a
@@ -97,6 +174,30 @@ pub struct FactorEntry {
     /// never been shown working end to end, so the report does not claim it
     /// has been.
     pub verification: String,
+    /// When this factor fires, for the factors whose decision is agent-level.
+    ///
+    /// Present means the scorer asks this rather than holding an `if`. Absent
+    /// means the decision is per-item — one factor per matching endpoint,
+    /// child or resource — and cannot be reduced to a question about the agent
+    /// as a whole. Those carry [`FactorEntry::requires`] instead.
+    #[serde(default)]
+    pub firing: Option<Firing>,
+    /// How this factor walks a collection and what each match says.
+    ///
+    /// Present for the factors that produce one finding per endpoint, child or
+    /// resource. Mutually exclusive with [`FactorEntry::firing`], which decides
+    /// once for the agent as a whole.
+    #[serde(default)]
+    pub per_item: Option<PerItem>,
+    /// A necessary condition for a per-item factor, never a sufficient one.
+    ///
+    /// A factor that walks an agent's endpoints cannot fire on an agent with
+    /// no endpoints. Stating that separately from `firing` keeps the two
+    /// honest: this is what makes the factor *possible*, not what makes it
+    /// *fire*, and nothing evaluates it as a gate. It exists so a catalogue
+    /// can be checked for factors that can never fire on this platform.
+    #[serde(default)]
+    pub requires: Option<Firing>,
     /// The best coverage this factor can claim even with its sensor healthy.
     ///
     /// Two factors need evidence the sensor alone cannot supply — a watchlist
@@ -109,6 +210,73 @@ pub struct FactorEntry {
 
 const fn yes() -> bool {
     true
+}
+
+/// One factor that walks a collection and reports each match.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PerItem {
+    /// Which collection to walk.
+    pub of: ItemKind,
+    /// Which items match.
+    #[serde(rename = "where")]
+    pub matching: ItemCondition,
+    /// The sentence each match prints.
+    pub title: String,
+    /// The evidence line beneath it.
+    pub source: String,
+    /// Report only the first match rather than every one.
+    ///
+    /// Some findings are about the agent having done a thing at all. Spawning
+    /// offensive tooling is one: three matches are not three times the finding,
+    /// and reporting each would push a score to its ceiling on repetition
+    /// rather than on severity.
+    #[serde(default)]
+    pub first_only: bool,
+    /// Points for matches after the first, where each one counts.
+    #[serde(default)]
+    pub subsequent_points: Option<u32>,
+}
+
+impl PerItem {
+    /// Everything that must hold for this to be usable.
+    ///
+    /// # Errors
+    ///
+    /// Returns the reason as text when the condition reads a field the kind
+    /// does not carry, or when either template names a placeholder it cannot.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.matching.fields_exist_on(self.of) {
+            return Err(format!(
+                "its condition reads a field a {} item does not carry",
+                self.of.as_str()
+            ));
+        }
+        for (which, text) in [("title", &self.title), ("source", &self.source)] {
+            Template::new(text, self.of).map_err(|error| format!("{which}: {error}"))?;
+        }
+        Ok(())
+    }
+
+    /// The title template, already checked.
+    ///
+    /// # Errors
+    ///
+    /// Returns the template error, which [`PerItem::validate`] has already
+    /// refused at load, so a caller reaching this is holding an entry that
+    /// never went through the loader.
+    pub fn title_template(&self) -> Result<Template, TemplateError> {
+        Template::new(&self.title, self.of)
+    }
+
+    /// The source template. See [`PerItem::title_template`].
+    ///
+    /// # Errors
+    ///
+    /// As [`PerItem::title_template`].
+    pub fn source_template(&self) -> Result<Template, TemplateError> {
+        Template::new(&self.source, self.of)
+    }
 }
 
 /// The validated catalogue.
@@ -128,6 +296,45 @@ impl Catalogue {
     #[must_use]
     pub fn entry(&self, code: &str) -> Option<&FactorEntry> {
         self.factors.iter().find(|factor| factor.code == code)
+    }
+
+    /// Whether the factor named by `code` fires for one agent.
+    ///
+    /// A factor with no `firing` condition is per-item: the decision cannot be
+    /// reduced to a question about the agent as a whole, so this returns
+    /// `false` and the scorer walks the items itself. A code the catalogue
+    /// does not describe also returns `false`, which is why the loader refuses
+    /// a catalogue that is missing one rather than leaving it to this.
+    #[must_use]
+    pub fn fires(&self, code: &str, signals: &Signals, thresholds: &Thresholds) -> bool {
+        self.fires_with(code, signals, thresholds, &[])
+    }
+
+    /// As [`Catalogue::fires`], with maturities the operator opted into.
+    ///
+    /// A factor the project has not committed to does not fire on a fresh
+    /// install. It is not hidden and not removed: `topgent policy lint` lists
+    /// it, and naming its maturity here switches it on. The default is silence
+    /// rather than a finding, because an operator who has not opted in has no
+    /// way to judge what an experimental factor's output is worth.
+    #[must_use]
+    pub fn fires_with(
+        &self,
+        code: &str,
+        signals: &Signals,
+        thresholds: &Thresholds,
+        also: &[Maturity],
+    ) -> bool {
+        let Some(entry) = self.entry(code) else {
+            return false;
+        };
+        if !entry.maturity.on_by_default() && !also.contains(&entry.maturity) {
+            return false;
+        }
+        entry
+            .firing
+            .as_ref()
+            .is_some_and(|firing| firing.holds(signals, thresholds))
     }
 }
 
@@ -181,11 +388,43 @@ fn parse_and_validate(source: &str) -> Result<Catalogue, String> {
         if factor.subsequent_points.is_some_and(|points| points == 0) {
             return Err(format!("{} scores nothing after the first", factor.code));
         }
+        if let Some(ceiling) = factor.max_points {
+            if ceiling < factor.points {
+                return Err(format!(
+                    "{} has a ceiling of {ceiling} below its own first occurrence of {}",
+                    factor.code, factor.points
+                ));
+            }
+            if factor.subsequent_points.is_none() {
+                return Err(format!(
+                    "{} sets a ceiling but cannot recur, so the ceiling means nothing",
+                    factor.code
+                ));
+            }
+        }
         if factor.sensor.trim().is_empty() || factor.verification.trim().is_empty() {
             return Err(format!(
                 "{} names no sensor or no verification",
                 factor.code
             ));
+        }
+        // Exactly one way of deciding. A factor with both would have two
+        // answers to the same question and no rule for which wins; a factor
+        // with neither cannot be checked for reachability at all, which is
+        // what these fields exist to make possible.
+        let ways = u8::from(factor.firing.is_some())
+            + u8::from(factor.per_item.is_some())
+            + u8::from(factor.requires.is_some());
+        if ways != 1 {
+            return Err(format!(
+                "{} states {ways} ways of deciding when it fires; it must state exactly one",
+                factor.code
+            ));
+        }
+        if let Some(per_item) = &factor.per_item {
+            per_item
+                .validate()
+                .map_err(|reason| format!("{}: {reason}", factor.code))?;
         }
     }
     for code in KNOWN_CODES {
@@ -292,9 +531,9 @@ mod tests {
 
     #[test]
     fn a_schema_this_build_does_not_understand_is_refused() {
-        let source = BUILTIN_JSON.replace(r#""schema_version": 1,"#, r#""schema_version": 2,"#);
+        let source = BUILTIN_JSON.replace(r#""schema_version": 7,"#, r#""schema_version": 8,"#);
         let error = parse_and_validate(&source).expect_err("an unknown schema is refused");
-        assert!(error.contains("schema 2"), "{error}");
+        assert!(error.contains("schema 8"), "{error}");
     }
 
     #[test]

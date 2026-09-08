@@ -197,25 +197,6 @@ fn claude_facts(
         }
     }
 
-    // The model an agent is configured to use is stated in its own settings.
-    // Reading it from traffic is not possible without decrypting TLS, and
-    // Topgent does not do that, so config is the honest source.
-    if let Some(v) = read_json(&settings)
-        && let Some(model) = v.get("model").and_then(Value::as_str)
-    {
-        facts.extend(emit(
-            ID,
-            &probe,
-            Confidence::Certain,
-            clock,
-            subject.clone(),
-            Claim::ModelInUse {
-                provider: "anthropic".to_owned(),
-                model: model.to_owned(),
-            },
-        ));
-    }
-
     for mcp in [
         home.join(".claude/.mcp.json"),
         home.join("Library/Application Support/Claude/claude_desktop_config.json"),
@@ -251,26 +232,6 @@ fn codex_facts(subject: &Subject, clock: &dyn Clock, home: &Path, facts: &mut Ve
     let probe = format!("{}", cfg.display());
     // Only the sandbox line is read, and only as a string. No TOML dependency
     // for one key, and nothing here is evaluated.
-    if let Some(model) = text
-        .lines()
-        .filter_map(|l| l.split_once('='))
-        .find(|(k, _)| k.trim() == "model")
-        .map(|(_, v)| v.trim().trim_matches('"').to_owned())
-        .filter(|m| !m.is_empty())
-    {
-        facts.extend(emit(
-            ID,
-            &probe,
-            Confidence::Certain,
-            clock,
-            subject.clone(),
-            Claim::ModelInUse {
-                provider: "openai".to_owned(),
-                model,
-            },
-        ));
-    }
-
     let sandboxed = text
         .lines()
         .filter_map(|l| l.split_once('='))
@@ -361,6 +322,10 @@ impl Collector for ConfigCollector {
                     pid: *pid,
                     started_at: *started_at,
                 };
+                // Which model an agent uses is read from signatures, for every
+                // family, rather than from a match arm that only two of them
+                // ever appeared in.
+                model_facts(&subject, clock, family, &home, *pid, &mut facts);
                 match *family {
                     "claude-code" => claude_facts(&subject, clock, &home, &by_family, &mut facts),
                     "codex-cli" => codex_facts(&subject, clock, &home, &mut facts),
@@ -452,4 +417,45 @@ mod invoked_agents {
             assert_eq!(invoked_agent_family(rule), None, "{rule} is not an agent");
         }
     }
+}
+
+/// Emits the model an agent is using, from the signature file.
+///
+/// One function for every family, where there used to be a match arm per
+/// family that only two of them appeared in. A new agent is now a few lines of
+/// JSON rather than a release.
+///
+/// The confidence follows the source, not the family. A transcript the agent
+/// wrote while running is `Certain`; a config file it may have been told to
+/// ignore for this run is `Likely`, because it states an intention rather than
+/// an observation.
+fn model_facts(
+    subject: &Subject,
+    clock: &dyn Clock,
+    family: &str,
+    home: &Path,
+    pid: u32,
+    facts: &mut Vec<Fact>,
+) {
+    let Ok(signatures) = crate::model::builtin() else {
+        return;
+    };
+    let Some(found) = crate::model::detect(signatures, family, home, pid) else {
+        return;
+    };
+    let confidence = match found.certainty {
+        crate::model::Certainty::Observed => Confidence::Certain,
+        crate::model::Certainty::Declared => Confidence::Likely,
+    };
+    facts.extend(emit(
+        ID,
+        &found.probe,
+        confidence,
+        clock,
+        subject.clone(),
+        Claim::ModelInUse {
+            provider: found.provider,
+            model: found.model,
+        },
+    ));
 }

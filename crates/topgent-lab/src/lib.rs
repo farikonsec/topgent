@@ -8,7 +8,9 @@
 #![deny(missing_docs)]
 
 pub mod bench;
+pub mod contract;
 pub mod overclaim;
+pub mod scenario;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

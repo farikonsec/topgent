@@ -19,6 +19,7 @@
 
 pub mod agents;
 pub mod alarm;
+mod capture;
 pub mod clock;
 pub mod compact;
 pub mod divider;
@@ -105,10 +106,30 @@ fn shape(compact: bool, restore: iced::Size) -> Task<Message> {
 }
 
 /// The size the large window opens at.
+// Sized to fit the smallest screen this is likely to open on. 1320x860 is
+// wider and taller than a 1280x768 display, and a window that opens past the
+// right edge takes its rightmost control with it: the packet-capture button
+// was drawn there, unreachable, and read as missing. iced gives an application
+// no monitor size to clamp against, so the default is chosen rather than
+// computed.
 const WINDOW: iced::Size = iced::Size {
-    width: 1320.0,
-    height: 860.0,
+    width: 1240.0,
+    height: 720.0,
 };
+
+/// Which overlay, if any, is in front of the window.
+///
+/// One value rather than a flag per overlay: two of these cannot be open at
+/// once, and separate booleans allow a state the interface has no drawing for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Overlay {
+    /// Nothing is in front of the window.
+    None,
+    /// The settings panel.
+    Settings,
+    /// The deeper-visibility dialog.
+    Capture,
+}
 
 /// Everything the window draws from.
 pub struct App {
@@ -124,8 +145,13 @@ pub struct App {
     panel: panels::Panel,
     /// How this looks, as the reader chose it.
     settings: settings::Settings,
-    /// Whether the settings panel is over the interface.
-    settings_open: bool,
+    /// Which overlay is in front of the window, if any.
+    ///
+    /// One field rather than a flag each, because two overlays cannot both be
+    /// open and two booleans allow exactly that. The old pair had an ordering in
+    /// the draw code deciding which won, which is a rule that lived in one place
+    /// and had to be remembered in every other.
+    overlay: Overlay,
     /// Where the divider between the agent table and the detail panel sits.
     ///
     /// Held rather than fixed, because how much of the window each deserves
@@ -148,6 +174,10 @@ pub struct App {
     draft: Draft,
     /// The agent a stop has been asked for but not yet confirmed.
     stopping: Option<u32>,
+    /// What the last event-log clear did, shown until the next one.
+    events_notice: Option<String>,
+    /// What the last grant attempt said, shown in the dialog.
+    capture_outcome: Option<String>,
     /// The most recent operator-facing outcome. It occupies a fixed footer
     /// slot and is cleared when the operator moves on to another action.
     status: Option<String>,
@@ -241,6 +271,18 @@ pub enum Message {
     SetRefresh(u64),
     /// Stop was pressed. Nothing has been signalled yet.
     AskStop(u32),
+    /// Set the event log aside and start a fresh one.
+    ClearEvents,
+    /// What clearing the event log did.
+    EventsCleared(String),
+    /// Open the deeper-visibility dialog.
+    AskCapture,
+    /// Close it without asking for anything.
+    CancelCapture,
+    /// Ask the operating system for the capability, through its own prompt.
+    GrantCapture,
+    /// What the operating system answered, and whether capture is now available.
+    CaptureGranted(bool, String),
     /// The confirmation was dismissed.
     CancelStop,
     /// The confirmation was accepted.
@@ -300,6 +342,12 @@ fn clears_status(message: &Message) -> bool {
             | Message::SetSound(..)
             | Message::AskStop(..)
             | Message::CancelStop
+            | Message::ClearEvents
+            | Message::EventsCleared(..)
+            | Message::AskCapture
+            | Message::CancelCapture
+            | Message::GrantCapture
+            | Message::CaptureGranted(..)
             | Message::RulePath(..)
             | Message::RuleCondition(..)
             | Message::RuleSeverity(..)
@@ -319,11 +367,13 @@ impl App {
             draft: Draft::default(),
             raised: std::collections::HashMap::new(),
             settings: settings::Settings::load(),
-            settings_open: false,
+            overlay: Overlay::None,
             split: Pane::layout(),
             compact: false,
             restore: WINDOW,
             stopping: None,
+            events_notice: None,
+            capture_outcome: None,
             status: None,
         };
         // The window's shape follows the state rather than only the toggle, so
@@ -341,6 +391,10 @@ impl App {
         }
     }
 
+    // One arm per message, in the order the enum declares them. Splitting it
+    // would scatter the state machine across helpers without making any one of
+    // them clearer.
+    #[allow(clippy::too_many_lines)]
     fn update(&mut self, message: Message) -> Task<Message> {
         // Feedback is contextual, not a permanent part of the interface. It
         // survives long enough to be read, then yields as soon as the reader
@@ -384,7 +438,11 @@ impl App {
                 Task::none()
             }
             Message::ToggleSettings => {
-                self.settings_open = !self.settings_open;
+                self.overlay = if matches!(self.overlay, Overlay::Settings) {
+                    Overlay::None
+                } else {
+                    Overlay::Settings
+                };
                 Task::none()
             }
             Message::Split(pane_grid::ResizeEvent { split, ratio }) => {
@@ -399,7 +457,7 @@ impl App {
             }
             Message::ToggleCompact => {
                 self.compact = !self.compact;
-                self.settings_open = false;
+                self.overlay = Overlay::None;
                 shape(self.compact, self.restore)
             }
             Message::SortBy(..)
@@ -413,6 +471,51 @@ impl App {
             Message::SetSound(on) => self.settle(|c| c.sound = on),
             Message::AskStop(pid) => {
                 self.stopping = Some(pid);
+                Task::none()
+            }
+            // Off the drawing thread, like every other action that touches
+            // the disk. A rename is quick; a window that freezes while it
+            // happens still looks like one that has crashed.
+            Message::ClearEvents => {
+                self.events_notice = Some("Clearing\u{2026}".to_owned());
+                Task::perform(report::clear_events(), Message::EventsCleared)
+            }
+            Message::EventsCleared(message) => {
+                self.events_notice = Some(message);
+                // Swept immediately, so the table empties in front of the
+                // person who pressed the button rather than at the next tick.
+                Task::perform(report::sweep(), |r| Message::Swept(Box::new(r)))
+            }
+            Message::AskCapture => {
+                self.overlay = Overlay::Capture;
+                self.capture_outcome = None;
+                Task::none()
+            }
+            Message::CancelCapture => {
+                self.overlay = Overlay::None;
+                Task::none()
+            }
+            Message::GrantCapture => {
+                // Off the interface thread. The elevation helper puts a
+                // password prompt on screen and blocks until it is answered,
+                // and doing that here froze the window: the dialog stayed up
+                // after the password was accepted and looked as though nothing
+                // had happened.
+                self.capture_outcome = Some("Asking the system\u{2026}".to_owned());
+                Task::perform(report::grant_capture(), |(granted, message)| {
+                    Message::CaptureGranted(granted, message)
+                })
+            }
+            Message::CaptureGranted(granted, message) => {
+                // Success closes the dialog, because there is nothing left to
+                // decide. Anything else keeps it open and says why, because
+                // there is.
+                self.overlay = if granted {
+                    Overlay::None
+                } else {
+                    Overlay::Capture
+                };
+                self.capture_outcome = Some(message);
                 Task::none()
             }
             Message::CancelStop => {
@@ -443,7 +546,7 @@ impl App {
             | Message::SetDisposition(..) => self.policy(message),
             Message::Open(_) | Message::Copy(_) | Message::Reveal(_) => self.hand_off(message),
             Message::Export(redacted) => {
-                self.settings_open = false;
+                self.overlay = Overlay::None;
                 self.status = Some("writing this session to a file...".to_owned());
                 Task::perform(report::export_session(redacted), Message::RuleChanged)
             }
@@ -478,7 +581,12 @@ impl App {
                             let selected_agent = selected
                                 .and_then(|pid| report.agents.iter().find(|a| a.pid == pid));
                             let evidence = container(column![
-                                panels::heading(panel, selected_agent, s),
+                                panels::heading(
+                                    panel,
+                                    selected_agent,
+                                    self.events_notice.as_deref(),
+                                    s
+                                ),
                                 panels::view(panel, report, selected, tables, draft, s),
                             ])
                             .style(theme::region(Region::Panel, s.palette))
@@ -533,7 +641,13 @@ impl App {
         let mut layers = stack![base];
         if let Some(pid) = self.stopping {
             layers = layers.push(agents::confirm_stop(pid, agent, s));
-        } else if self.settings_open {
+        } else if matches!(self.overlay, Overlay::Capture) {
+            layers = layers.push(capture::dialog(
+                &topgent_collect::capture::offer(),
+                self.capture_outcome.as_deref(),
+                s,
+            ));
+        } else if matches!(self.overlay, Overlay::Settings) {
             layers = layers.push(settings::panel(self.settings, s));
         }
         layers.into()

@@ -4,13 +4,6 @@
 //! is no. A sandboxed agent is not charged for shell it cannot use, and an
 //! endpoint is not a finding merely because it is an endpoint.
 
-use super::classify::executable_name;
-use super::classify::is_loopback;
-use super::classify::is_private_peer;
-use super::classify::offensive_tool;
-use super::classify::persistence_path;
-use super::classify::suspicious_port;
-use super::classify::topgent_path;
 use super::factor::Factor;
 use super::factor::FactorCode;
 use crate::graph::Agent;
@@ -46,125 +39,19 @@ pub(super) fn recon_factor(
     })
 }
 
-pub(super) fn endpoint_behaviour_factors(
-    agent: &Agent,
-    policy: &topgent_policy::Policy,
-) -> Vec<Factor> {
-    let w = &policy.weights;
-    let mut factors = Vec::new();
-    for endpoint in &agent.endpoints {
-        if matches!(endpoint.direction, topgent_facts::Direction::Listening)
-            && !is_loopback(&endpoint.host)
-        {
-            factors.push(Factor {
-                code: FactorCode::ExposedListener,
-                points: w.exposed_listener,
-                title: format!("Opened a listener on {}:{}", endpoint.host, endpoint.port),
-                source: "live listening socket exposed beyond loopback".to_owned(),
-                confidence: agent.confidence_for("socket_open"),
-            });
-        }
-        if matches!(endpoint.direction, topgent_facts::Direction::Outbound) {
-            let raw = endpoint.host.parse::<std::net::IpAddr>().is_ok();
-            if crate::network::is_metadata_service(&endpoint.host) {
-                factors.push(Factor {
-                    code: FactorCode::MetadataService,
-                    points: w.metadata_service,
-                    title: "Contacted a cloud instance metadata service".to_owned(),
-                    source: format!("outbound connection to {}:{}", endpoint.host, endpoint.port),
-                    confidence: agent.confidence_for("socket_open"),
-                });
-            }
-            if raw && suspicious_port(endpoint.port) {
-                factors.push(Factor {
-                    code: FactorCode::SuspiciousEndpoint,
-                    points: w.suspicious_endpoint,
-                    title: format!("Raw address on unusual port {}", endpoint.port),
-                    source: format!(
-                        "{}:{} has no DNS name in the socket metadata",
-                        endpoint.host, endpoint.port
-                    ),
-                    confidence: agent.confidence_for("socket_open"),
-                });
-            }
-            if is_private_peer(&endpoint.host) && !is_loopback(&endpoint.host) {
-                factors.push(Factor {
-                    code: FactorCode::PrivatePeer,
-                    points: w.private_peer,
-                    title: "Reached another host on the private network".to_owned(),
-                    source: format!("outbound connection to {}:{}", endpoint.host, endpoint.port),
-                    confidence: agent.confidence_for("socket_open"),
-                });
-            }
-        }
+/// The one snapshot factor that is about a count rather than about an item.
+///
+/// A burst of descendants is a property of the agent, not of any one child, so
+/// it cannot be a per-item entry. Its gate lives in the catalogue with the rest
+/// of the agent-level ones; this only builds the finding.
+pub(super) fn process_explosion_factor(agent: &Agent, policy: &topgent_policy::Policy) -> Factor {
+    Factor {
+        code: FactorCode::ProcessExplosion,
+        points: policy.weights.process_explosion,
+        title: "Process tree expanded unusually fast".to_owned(),
+        source: format!("{} descendants are running", agent.children.len()),
+        confidence: agent.confidence_for("child_process_seen"),
     }
-    factors
-}
-
-/// Snapshot-only rogue behaviour. Each factor is derived from metadata already
-/// present in the graph; none reads payloads or performs I/O.
-pub(super) fn behaviour_factors(agent: &Agent, policy: &topgent_policy::Policy) -> Vec<Factor> {
-    let w = &policy.weights;
-    let mut factors = endpoint_behaviour_factors(agent, policy);
-    if let Some(child) = agent.children.iter().find(|c| offensive_tool(&c.name)) {
-        factors.push(Factor {
-            code: FactorCode::OffensiveTool,
-            points: w.offensive_tool,
-            title: format!(
-                "Spawned offensive tooling: {}",
-                executable_name(&child.name)
-            ),
-            source: format!("child pid {}, depth {}", child.pid, child.depth),
-            confidence: agent.confidence_for("child_process_seen"),
-        });
-    }
-    if agent.children.len() >= policy.thresholds.process_children {
-        factors.push(Factor {
-            code: FactorCode::ProcessExplosion,
-            points: w.process_explosion,
-            title: "Process tree expanded unusually fast".to_owned(),
-            source: format!("{} descendants are running", agent.children.len()),
-            confidence: agent.confidence_for("child_process_seen"),
-        });
-    }
-    for resource in agent.resources.iter().filter(|r| r.observed.is_yes()) {
-        if resource.sensitive {
-            factors.push(Factor {
-                code: FactorCode::CredentialAccess,
-                points: w.credential_access,
-                title: format!("Credential actually opened: {}", resource.path),
-                source: "observed filesystem access, not inferred reachability".to_owned(),
-                confidence: agent.confidence_for("file_touched"),
-            });
-        }
-        if resource
-            .access
-            .is_some_and(topgent_facts::Access::is_mutating)
-            && persistence_path(&resource.path)
-        {
-            factors.push(Factor {
-                code: FactorCode::PersistenceWrite,
-                points: w.persistence_write,
-                title: format!("Wrote a persistence location: {}", resource.path),
-                source: "observed mutating filesystem access".to_owned(),
-                confidence: agent.confidence_for("file_touched"),
-            });
-        }
-        if resource
-            .access
-            .is_some_and(topgent_facts::Access::is_mutating)
-            && topgent_path(&resource.path)
-        {
-            factors.push(Factor {
-                code: FactorCode::SelfTampering,
-                points: w.self_tampering,
-                title: "Modified Topgent or its policy".to_owned(),
-                source: resource.path.clone(),
-                confidence: agent.confidence_for("file_touched"),
-            });
-        }
-    }
-    factors
 }
 
 pub(super) fn sandbox_factor(agent: &Agent) -> Option<Factor> {
@@ -229,4 +116,120 @@ pub(super) fn disallowed_asset_factors(
         });
     }
     factors
+}
+
+/// Every finding the catalogue's per-item entries produce for one agent.
+///
+/// Eleven factors used to be a hand-written loop each, in this file, with the
+/// sentence and the points and the condition all in the same `if`. They are now
+/// one loop over the catalogue: which collection to walk, which items match,
+/// and what each match says all come from data, and what stays here is the part
+/// that has to — classifying an address or a path, and turning a matched item
+/// into a `Factor` the scorer already understands.
+pub(super) fn per_item_factors(agent: &Agent, policy: &topgent_policy::Policy) -> Vec<Factor> {
+    let Ok(catalogue) = topgent_policy::catalogue::builtin() else {
+        // The loader has already refused it and said the rules in force are not
+        // the operator's. Producing findings from a catalogue this build could
+        // not validate would be worse than producing none.
+        return Vec::new();
+    };
+    let ports = |list: topgent_policy::NumberList| -> Vec<u32> {
+        match list {
+            topgent_policy::NumberList::SuspiciousPorts => topgent_policy::signals::builtin()
+                .map(|signals| {
+                    signals
+                        .suspicious_ports
+                        .iter()
+                        .map(|p| u32::from(*p))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        }
+    };
+
+    let mut factors = Vec::new();
+    for entry in &catalogue.factors {
+        let Some(per_item) = &entry.per_item else {
+            continue;
+        };
+        let Some(code) = FactorCode::named(&entry.code) else {
+            continue;
+        };
+        if !entry.maturity.on_by_default() {
+            continue;
+        }
+        let (Ok(title), Ok(source)) = (per_item.title_template(), per_item.source_template())
+        else {
+            continue;
+        };
+        let confidence = agent.confidence_for(evidence_kind(per_item.of));
+        let base = weight_of(code, &policy.weights);
+
+        let items = crate::risk::items_of(agent, per_item.of);
+        let matched = items
+            .iter()
+            .filter(|item| per_item.matching.holds(item, &ports));
+        for (n, item) in matched.enumerate() {
+            if per_item.first_only && n > 0 {
+                break;
+            }
+            let points = if n == 0 {
+                base
+            } else {
+                per_item.subsequent_points.unwrap_or(base)
+            };
+            factors.push(Factor {
+                code,
+                points,
+                title: title.render(item),
+                source: source.render(item),
+                confidence,
+            });
+        }
+    }
+    factors
+}
+
+/// Which kind of evidence a finding over this collection rests on.
+///
+/// A factor reads its own evidence kind rather than borrowing the agent's best
+/// signal, so an inference is never presented with the authority of a direct
+/// observation.
+const fn evidence_kind(kind: topgent_policy::ItemKind) -> &'static str {
+    match kind {
+        topgent_policy::ItemKind::Endpoints => "socket_open",
+        topgent_policy::ItemKind::Children => "child_process_seen",
+        topgent_policy::ItemKind::Resources => "file_touched",
+    }
+}
+
+/// The tunable weight for one code.
+///
+/// Exhaustive on purpose: a code added to the enum will not compile until
+/// somebody decides what it is worth.
+const fn weight_of(code: FactorCode, w: &topgent_policy::Weights) -> u32 {
+    match code {
+        FactorCode::ArbitraryExecution => w.arbitrary_execution,
+        FactorCode::BroadWrite => w.broad_write,
+        FactorCode::UnrestrictedNetwork => w.unrestricted_network,
+        FactorCode::SecretReachable => w.first_secret,
+        FactorCode::DeclarationDrift => w.declaration_drift,
+        FactorCode::AgentChain => w.agent_chain,
+        FactorCode::ExfiltrationPath => w.exfiltration_path,
+        FactorCode::ReconFanout => w.recon_fanout,
+        FactorCode::ExposedListener => w.exposed_listener,
+        FactorCode::OffensiveTool => w.offensive_tool,
+        FactorCode::ProcessExplosion => w.process_explosion,
+        FactorCode::SuspiciousEndpoint => w.suspicious_endpoint,
+        FactorCode::PrivatePeer => w.private_peer,
+        FactorCode::MetadataService => w.metadata_service,
+        FactorCode::CredentialAccess => w.credential_access,
+        FactorCode::PersistenceWrite => w.persistence_write,
+        FactorCode::SelfTampering => w.self_tampering,
+        FactorCode::DisallowedAsset => w.disallowed_asset,
+        // Both are fixed by design: a sandbox escape and a critical watchlist
+        // match mean the agent is doing something it said it would not, and
+        // being able to tune those down would defeat declaring them.
+        FactorCode::SandboxEscape | FactorCode::Watchlist => 100,
+    }
 }

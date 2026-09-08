@@ -22,3 +22,11 @@ workspace = true
 [[test]]
 name = "suite"
 path = "tests/suite/main.rs"
+
+[[test]]
+name = "firing_equivalence"
+path = "tests/firing_equivalence.rs"
+
+[[test]]
+name = "item_views"
+path = "tests/item_views.rs"

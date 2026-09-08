@@ -13,6 +13,11 @@ pub(crate) fn doctor_command(args: &[String]) -> i32 {
                 "platform": platform,
                 "sensors": sensors,
                 "coverage": coverage,
+                // Every version that is part of the contract, in one place. A
+                // reader holding an artefact and asking "can this build read
+                // it" should not have to run four commands to find out.
+                "versions": versions(),
+                "contract_fingerprint": topgent_lab::contract::contract().fingerprint(),
             })
         );
     } else {
@@ -64,4 +69,23 @@ pub(crate) fn doctor_command(args: &[String]) -> i32 {
         })
     });
     i32::from(unhealthy)
+}
+
+/// Every version number this build's public surface depends on.
+///
+/// Read from the same constants the contract fingerprint is taken over, so
+/// this can never say one thing while the fingerprint covers another.
+fn versions() -> serde_json::Value {
+    serde_json::json!({
+        "topgent": env!("CARGO_PKG_VERSION"),
+        "fact_schema": topgent_facts::SCHEMA_VERSION.0,
+        "evidence_schema": topgent_evidence::EVIDENCE_SCHEMA,
+        "report_contract": topgent_export::REPORT_CONTRACT_VERSION,
+        "replay_contract": topgent_report::REPLAY_CONTRACT_VERSION,
+        "rule_catalogue": topgent_report::RULE_CATALOGUE_VERSION,
+        "risk_catalogue_schema": topgent_policy::catalogue::builtin()
+            .map(|catalogue| catalogue.schema_version)
+            .unwrap_or_default(),
+        "cyclonedx_spec": topgent_export::CYCLONEDX_SPEC_VERSION,
+    })
 }

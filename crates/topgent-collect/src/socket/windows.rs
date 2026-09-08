@@ -110,6 +110,76 @@ pub fn parse_windows_tcp_connections(out: &str, now: UnixMillis) -> Vec<SocketRo
     rows
 }
 
+#[cfg(any(windows, test, fuzzing))]
+/// Every local endpoint in a `netstat -ano` listing, with its owner.
+///
+/// The companion to [`parse_windows_netstat`], which reads the peer end. A
+/// capture needs the local one: a packet names a local port, and this names
+/// who holds it and whether that port is listening.
+///
+/// Both row shapes are handled. A TCP row has five columns because it carries
+/// a state; a UDP row has four because it does not. Requiring five is how a
+/// parser silently returns no UDP rows at all.
+#[must_use]
+pub fn parse_windows_netstat_local(out: &str) -> Vec<(topgent_facts::Protocol, u16, u32, bool)> {
+    let mut rows = Vec::new();
+    for line in out.lines() {
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        let (protocol, local, state, pid) = match columns.as_slice() {
+            [protocol, local, _peer, state, pid] => (protocol, local, Some(state), pid),
+            [protocol, local, _peer, pid] => (protocol, local, None, pid),
+            _ => continue,
+        };
+        let Some((_, port)) = local.rsplit_once(':') else {
+            continue;
+        };
+        let (Ok(port), Ok(pid)) = (port.parse::<u16>(), pid.parse::<u32>()) else {
+            continue;
+        };
+        // Port zero holds nothing to attribute through, and pid zero is what
+        // netstat prints where it will not name an owner.
+        if port == 0 || pid == 0 {
+            continue;
+        }
+        let listening = state.is_some_and(|state| state.eq_ignore_ascii_case("LISTENING"));
+        rows.push((
+            topgent_facts::Protocol::parse(protocol),
+            port,
+            pid,
+            listening,
+        ));
+    }
+    rows
+}
+
+#[cfg(any(windows, test, fuzzing))]
+/// Every local address in a `netstat -ano` listing.
+///
+/// The wildcard is not an address: a socket bound to every interface names
+/// none of them.
+#[must_use]
+pub fn parse_windows_netstat_addresses(out: &str) -> Vec<std::net::IpAddr> {
+    let mut found = Vec::new();
+    for line in out.lines() {
+        let columns = line.split_whitespace().collect::<Vec<_>>();
+        let local = match columns.as_slice() {
+            [_protocol, local, _peer, _state, _pid] => local,
+            [_protocol, local, _peer, _pid] => local,
+            _ => continue,
+        };
+        let Some((host, _)) = local.rsplit_once(':') else {
+            continue;
+        };
+        let host = host.trim_matches(['[', ']']);
+        if let Ok(address) = host.parse::<std::net::IpAddr>()
+            && !found.contains(&address)
+        {
+            found.push(address);
+        }
+    }
+    found
+}
+
 /// Parse Windows `netstat -ano -p tcp` output.
 ///
 /// Only TCP listeners and established connections with an explicit owner PID

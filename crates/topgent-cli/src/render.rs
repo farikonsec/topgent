@@ -7,21 +7,24 @@
 
 use crate::output::now_ms;
 use crate::style::{Column, table};
-use topgent_collect::SystemClock;
-use topgent_collect::default_collectors;
-use topgent_collect::sweep;
 use topgent_core::Agent;
 use topgent_core::Risk;
-use topgent_core::analyse;
 use topgent_facts::Tri;
 use topgent_journal::Journal;
 
 /// One pass: collect, fold, score, print.
+///
+/// The sweep comes from `topgent_report::observe`, which is the same one the
+/// JSON report and the desktop app are built from. It used to run its own with
+/// `default_collectors()` and score without the operator's policy, so this
+/// table and `--json` could disagree about the same host: the reach collector
+/// is configured from policy, and a table that scored without one silently
+/// dropped every credential and watchlist finding the report showed.
 pub(crate) fn render(show_facts: bool) {
-    let collectors = default_collectors();
-    let clock = SystemClock;
-    let result = sweep(&collectors, &clock);
-    let scored = analyse(&result.facts);
+    let observed = topgent_report::observe();
+    let result = &observed.sweep;
+    let collector_count = result.runs.len();
+    let scored = topgent_core::analyse_with(&result.facts, &observed.policy);
     journal_sweep(&scored);
 
     let ink = crate::style::Ink::decide();
@@ -32,10 +35,10 @@ pub(crate) fn render(show_facts: bool) {
         ink.heading(&format!("{} agents", scored.len())),
         ink.faint(&format!(
             "topgent {} · {} facts · {} of {} sensors",
-            env!("CARGO_PKG_VERSION"),
+            topgent_report::version(),
             result.facts.len(),
-            collectors.len() - result.failures.len(),
-            collectors.len()
+            collector_count - result.failures.len(),
+            collector_count
         ))
     );
 

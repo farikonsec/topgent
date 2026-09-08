@@ -28,11 +28,22 @@
 #![deny(missing_docs)]
 
 pub mod catalogue;
+pub mod exception;
+pub mod firing;
 pub mod health;
+pub mod item;
+pub mod lint;
 pub mod locations;
 pub mod signals;
 
+pub use catalogue::Maturity;
+pub use exception::{Exception, ExceptionError, Suppression};
+pub use firing::{Amount, Firing, Signal, Signals, ThresholdName};
 pub use health::PolicyHealth;
+pub use item::{
+    Flag, Item, ItemCondition, ItemKind, Number, NumberList, Placeholder, Template, TemplateError,
+};
+pub use lint::{Warning, WarningCode};
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -328,6 +339,9 @@ pub struct Policy {
     pub assets: Vec<AssetPolicy>,
     /// Optional semantic context. Host monitoring does not depend on it.
     pub semantic: SemanticSettings,
+    /// Findings the operator has accepted, each scoped and dated.
+    #[serde(default)]
+    pub exceptions: Vec<Exception>,
 }
 
 impl Default for Policy {
@@ -339,6 +353,7 @@ impl Default for Policy {
             watchlist: Vec::new(),
             assets: Vec::new(),
             semantic: SemanticSettings::default(),
+            exceptions: Vec::new(),
         }
     }
 }

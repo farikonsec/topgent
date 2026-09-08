@@ -8,6 +8,47 @@ use super::row::SocketRow;
 use topgent_facts::Direction;
 use topgent_facts::Protocol;
 
+/// Every local port in an `lsof -i -n -P` listing, with the process holding it.
+///
+/// The companion to [`parse_lsof`], which reads the peer end. A capture needs
+/// the other half: a packet names a local port, and this names who holds it.
+///
+/// macOS writes the local address first and the peer after an arrow, so a
+/// connected socket gives both and a listener gives only the local one. Both
+/// are useful here: a listener is exactly what inbound traffic is attributed
+/// through.
+#[must_use]
+pub fn parse_lsof_local(out: &str) -> Vec<(Protocol, u16, u32, bool)> {
+    let mut rows = Vec::new();
+    for line in out.lines().skip(1) {
+        let cols: Vec<&str> = line.split_whitespace().collect();
+        // COMMAND PID USER FD TYPE DEVICE SIZE/OFF NODE NAME [STATE]
+        let (Some(pid), Some(node), Some(name)) = (cols.get(1), cols.get(7), cols.get(8)) else {
+            continue;
+        };
+        let Ok(pid) = pid.parse::<u32>() else {
+            continue;
+        };
+        let local = name.split_once("->").map_or(*name, |(local, _)| local);
+        let Some((_, port)) = local.rsplit_once(':') else {
+            continue;
+        };
+        let Ok(port) = port.parse::<u16>() else {
+            continue;
+        };
+        // A socket on port zero holds no port anything could be attributed
+        // through, the same rule the Linux tables get.
+        if port == 0 {
+            continue;
+        }
+        // lsof puts the connection state in a trailing parenthesis. A
+        // listener is the only state that makes a flow inbound.
+        let listening = cols.get(9).is_some_and(|state| *state == "(LISTEN)");
+        rows.push((Protocol::parse(node), port, pid, listening));
+    }
+    rows
+}
+
 /// Parse `lsof -i -n -P` output.
 ///
 /// Split out so the parser can be tested against captured output without

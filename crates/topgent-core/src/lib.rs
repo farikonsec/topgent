@@ -28,15 +28,15 @@ pub mod risk;
 
 pub use graph::{
     Agent, AgentEdge, AgentGraph, AgentId, Connector, Endpoint, IdentityKind, RejectReason,
-    Rejected, ResourceAccess, fold, fold_with_home, resource_key,
+    Rejected, ResourceAccess, Sighting, fold, fold_with_home, resource_key,
 };
 pub use inventory::{
     Asset, AssetId, AssetKind, Inventory, Relationship, agent_asset_id, build as build_inventory,
     build_with_installed as build_inventory_with_installed, extension_asset_id,
 };
 pub use risk::{
-    Factor, FactorCode, Grade, Remediation, Risk, assess, assess_with, matched_watchlist_rules,
-    remediations,
+    Factor, FactorCode, Grade, Remediation, Risk, apply_exceptions, assess, assess_with, items_of,
+    matched_watchlist_rules, remediations, signals_for,
 };
 
 /// Fold a fact stream and score every agent in it.
@@ -53,7 +53,25 @@ pub fn analyse_with(
     facts: &[topgent_facts::Fact],
     policy: &topgent_policy::Policy,
 ) -> Vec<(Agent, Risk)> {
-    fold(facts)
+    analyse_at(facts, policy, std::env::var("HOME").ok().as_deref())
+}
+
+/// Fold and score, with the home directory supplied rather than read.
+///
+/// The one impure edge of the fold is which directory `~` stands for, and a
+/// replay must not take it from the machine doing the replaying. A bundle
+/// collected under `/Users/someone` and replayed under `/home/other` produced
+/// a different resource set, a different factor count and a different grade,
+/// because paths that had folded to `~/...` on one machine stayed absolute on
+/// the other. Passing `None` keeps every path literal, which is what makes two
+/// replays of one bundle agree wherever they run.
+#[must_use]
+pub fn analyse_at(
+    facts: &[topgent_facts::Fact],
+    policy: &topgent_policy::Policy,
+    home: Option<&str>,
+) -> Vec<(Agent, Risk)> {
+    fold_with_home(facts, home)
         .agents
         .into_iter()
         .map(|a| {

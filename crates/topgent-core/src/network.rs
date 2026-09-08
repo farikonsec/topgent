@@ -121,6 +121,14 @@ pub struct NetworkRecord {
     pub last_seen: u64,
     /// Number of sweeps in which the tuple was observed.
     pub observations: u64,
+    /// Packets a capture counted for this tuple, summed across sweeps.
+    ///
+    /// `None` where no capture ran or none saw it. Distinct from
+    /// `observations` in the way that matters: that counts how often Topgent
+    /// looked and found something, and this counts traffic that actually
+    /// moved. Conflating them is exactly the mistake the module note warns
+    /// about.
+    pub packets: Option<u64>,
     /// Bounded timestamps for recent sweeps where this tuple was visible.
     pub sample_times: Vec<u64>,
     /// Whether the tuple was present in the most recent socket snapshot.
@@ -266,6 +274,7 @@ pub fn merge_network_history(
                 first_seen: observed_at,
                 last_seen: observed_at,
                 observations: 1,
+                packets: endpoint.packets,
                 sample_times: vec![observed_at],
                 currently_observed: true,
                 last_visibility_change: observed_at,
@@ -283,6 +292,13 @@ pub fn merge_network_history(
                     record.last_seen = record.last_seen.max(observed_at);
                     record.first_seen = record.first_seen.min(observed_at);
                     record.observations = record.observations.saturating_add(1);
+                    // Summed, because each sweep's count is the traffic since
+                    // the last one. A capture that starts partway through a
+                    // record's life must not erase what was counted before it.
+                    record.packets = match (record.packets, candidate.packets) {
+                        (Some(kept), Some(seen)) => Some(kept.saturating_add(seen)),
+                        (kept, seen) => kept.or(seen),
+                    };
                     if record.sample_times.last().copied() != Some(observed_at) {
                         record.sample_times.push(observed_at);
                         if record.sample_times.len() > MAX_NETWORK_SAMPLES {

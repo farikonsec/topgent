@@ -34,7 +34,8 @@ mod grade;
 mod remediation;
 mod watchlist;
 
-pub use assess::{assess, assess_with, identity_order};
+pub use assess::{apply_exceptions, assess, assess_with, identity_order, signals_for};
+pub use classify::items_of;
 pub use factor::{Factor, FactorCode};
 pub use grade::{Grade, Risk};
 pub use remediation::{Remediation, remediations};

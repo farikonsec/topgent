@@ -309,6 +309,18 @@ pub const LSOF: SystemTool = SystemTool {
     candidates: &["/usr/sbin/lsof", "/usr/bin/lsof"],
 };
 
+/// Reads a binary's file capabilities. Used only on the grant path.
+pub const GETCAP: SystemTool = SystemTool {
+    name: "getcap",
+    candidates: &["/usr/sbin/getcap", "/sbin/getcap", "/usr/bin/getcap"],
+};
+
+/// The process table tool, used only to read one named flag's value.
+pub const PS: SystemTool = SystemTool {
+    name: "ps",
+    candidates: &["/bin/ps", "/usr/bin/ps"],
+};
+
 /// Reverse-lookup helpers, used only to label an address for a person to read.
 pub const DIG: SystemTool = SystemTool {
     name: "dig",

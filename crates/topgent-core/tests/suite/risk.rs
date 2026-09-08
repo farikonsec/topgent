@@ -39,15 +39,18 @@ fn the_worked_example_scores_as_critical_and_says_why() {
     assert_eq!(risk.identity_multiplier, 100);
     assert_eq!(
         codes(&risk),
+        // Reachability sits at the bottom now, and that is the point of the
+        // rebalance: what an agent can run, write and reach out to outranks
+        // what the account it happens to run under could read.
         vec![
             FactorCode::ArbitraryExecution,
             FactorCode::BroadWrite,
-            FactorCode::SecretReachable,
             FactorCode::UnrestrictedNetwork,
-            FactorCode::SecretReachable,
             FactorCode::AgentChain,
-            FactorCode::ExfiltrationPath,
             FactorCode::DeclarationDrift,
+            FactorCode::ExfiltrationPath,
+            FactorCode::SecretReachable,
+            FactorCode::SecretReachable,
         ],
         "highest points first, ties broken by code so the list is stable"
     );
@@ -191,7 +194,7 @@ fn a_second_reachable_credential_is_worth_less_than_the_first() {
             .reachable("~/.ssh/id_ed25519", Access::Read, true)
             .build(),
     ));
-    assert_eq!(one.score, 15);
+    assert_eq!(one.score, 6);
 
     let two = assess(&only(
         &Stream::new(1)
@@ -201,7 +204,10 @@ fn a_second_reachable_credential_is_worth_less_than_the_first() {
             .reachable("~/.ssh/id_ed25519", Access::Read, true)
             .build(),
     ));
-    assert_eq!(two.score, 27, "15 for the first, 12 for the next");
+    assert_eq!(
+        two.score, 8,
+        "6 for the first, 2 for the next: reachability is context"
+    );
     assert_eq!(
         codes(&two),
         vec![FactorCode::SecretReachable, FactorCode::SecretReachable]
@@ -243,7 +249,7 @@ fn a_credential_in_reach_only_becomes_a_path_when_something_can_act_on_it() {
     );
     assert_eq!(
         both.score,
-        secret_only.score + shell_only.score + 12,
+        secret_only.score + shell_only.score + 8,
         "the compound factor is the difference"
     );
 }
@@ -380,7 +386,7 @@ fn the_fix_list_is_one_entry_per_problem_worth_what_fixing_it_returns() {
         .iter()
         .find(|f| f.cancels == FactorCode::SecretReachable)
         .unwrap();
-    assert_eq!(secret.points, 27, "15 + 12");
+    assert_eq!(secret.points, 8, "6 + 2");
     assert_eq!(secret.site, "filesystem");
 
     // Strongest first.
@@ -763,5 +769,66 @@ fn the_unevaluated_band_claims_no_severity() {
     assert_eq!(
         Grade::from_label(Grade::NotEvaluated.label()),
         Some(Grade::NotEvaluated)
+    );
+}
+
+#[test]
+fn a_home_directory_full_of_credentials_cannot_dominate_a_score() {
+    // The defect this ceiling exists for. Every agent an account owns can
+    // reach exactly the same credentials, so without a cap the number of
+    // secrets on the machine became a score about the agent, and ten of them
+    // put every process on the host into the same band before it had done
+    // anything.
+    let mut stream = Stream::new(1).seen("/bin/a", 501, "testuser");
+    for i in 0..12 {
+        stream = stream.reachable(&format!("~/.creds/key{i}"), Access::Read, true);
+    }
+    let risk = assess(&only(&stream.build()));
+
+    let reachable: u32 = risk
+        .factors
+        .iter()
+        .filter(|f| f.code == FactorCode::SecretReachable)
+        .map(|f| f.points)
+        .sum();
+    assert_eq!(reachable, 12, "the ceiling holds however many there are");
+    assert_eq!(
+        risk.factors
+            .iter()
+            .filter(|f| f.code == FactorCode::SecretReachable)
+            .count(),
+        12,
+        "every credential is still reported; only its contribution is capped"
+    );
+    assert_eq!(risk.grade, Grade::Low);
+}
+
+#[test]
+fn one_observed_credential_read_outscores_a_dozen_reachable_ones() {
+    // The rebalance stated as a property rather than as a number: behaviour
+    // beats reachability, whatever the machine happens to be holding.
+    let mut reachable = Stream::new(1).seen("/bin/a", 501, "testuser");
+    for i in 0..12 {
+        reachable = reachable.reachable(&format!("~/.creds/key{i}"), Access::Read, true);
+    }
+    let context = assess(&only(&reachable.build()));
+
+    // Both facts, because that is the real shape: the reach collector probes
+    // the path every sweep and the filesystem collector records the open. A
+    // touch alone carries no `sensitive` mark, since nothing has classified
+    // the path yet.
+    let observed = assess(&only(
+        &Stream::new(2)
+            .seen("/bin/a", 501, "testuser")
+            .reachable("~/.aws/credentials", Access::Read, true)
+            .touched("~/.aws/credentials", Access::Read)
+            .build(),
+    ));
+
+    assert!(
+        observed.score > context.score,
+        "observed {} must beat reachable {}",
+        observed.score,
+        context.score
     );
 }

@@ -29,3 +29,48 @@ pub use launcher::{SCRIPT_RUNTIMES, is_script_runtime, parse_windows_launchers};
 pub use owner::valid_windows_sid;
 pub use owner::{Owner, current_owner, owned_by, owner_of, with_resolved_owner};
 pub use table::{ProcInfo, family_of, snapshot};
+
+/// Maps every process to the nearest recognised agent above it.
+///
+/// An agent does its work through helpers: a shell it spawned, a `ping`, a
+/// short-lived child. Those hold the sockets and send the packets, and none of
+/// them is an agent, so a fact anchored to one is a fact about nobody and the
+/// fold rejects it. Walking up to the nearest ancestor with a family is what
+/// makes a helper's behaviour count as its agent's.
+///
+/// The walk stops where two different families meet, because a process under
+/// two agents belongs to neither in particular and guessing would put one
+/// agent's behaviour on another's row.
+#[must_use]
+pub fn agent_owners(
+    processes: &[ProcInfo],
+) -> std::collections::BTreeMap<u32, topgent_facts::Subject> {
+    let by_pid: std::collections::BTreeMap<u32, &ProcInfo> = processes
+        .iter()
+        .map(|process| (process.pid, process))
+        .collect();
+    processes
+        .iter()
+        .filter_map(|process| {
+            let mut current = Some(process.pid);
+            let mut owner = None;
+            for _ in 0..processes.len() {
+                let Some(pid) = current else { break };
+                let Some(candidate) = by_pid.get(&pid) else {
+                    break;
+                };
+                if let Some(family) = candidate.family {
+                    match owner {
+                        None => owner = Some((family, candidate.subject())),
+                        Some((owned_family, _)) if owned_family == family => {
+                            owner = Some((family, candidate.subject()));
+                        }
+                        Some(_) => break,
+                    }
+                }
+                current = candidate.parent;
+            }
+            owner.map(|(_, subject)| (process.pid, subject))
+        })
+        .collect()
+}

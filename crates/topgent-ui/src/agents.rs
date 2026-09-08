@@ -135,18 +135,33 @@ fn summary<'a>(
     let count = report.map_or(0, |r| r.agents.len());
     let worst = report.and_then(Report::worst);
 
+    // First in the row, not last. It used to sit after Settings, which on a
+    // 1280-wide screen put it past the right edge of a 1320-wide window: the
+    // control was drawn, unreachable, and looked to the operator as though it
+    // did not exist. A control that announces a missing capability belongs
+    // where it is seen, ahead of the preferences.
+    // Always present, never vanishing. The button used to disappear the moment
+    // the grant landed, which left no way to tell an enabled capability from a
+    // control that had never been there. It is a status now, and pressing it
+    // opens the same dialog.
+    let capture_state = topgent_collect::capture::offer().state;
+    // Asked of the capture itself, not inferred from the permission. A granted
+    // capability that nothing is using and a capture that is reading packets
+    // are different states, and the indicator has to be able to say which.
+    let (capture_label, capture_tone) = topgent_collect::capture::indicator();
+    let capture = capture_state.is_actionable();
     let controls = row![
         refresh_button(sweeping, s),
         chrome_button(
             crate::glyph::Icon::Reset,
-            "Reset",
+            "Reset".to_owned(),
             "Reset panel sizes",
             Message::ResetSplit,
             s,
         ),
         chrome_button(
             crate::glyph::Icon::Compact,
-            "Compact",
+            "Compact".to_owned(),
             "Shrink to a small always-on-top window",
             Message::ToggleCompact,
             s,
@@ -155,6 +170,26 @@ fn summary<'a>(
     ]
     .spacing(s.pad(space::TIGHT))
     .align_y(iced::Alignment::Center);
+
+    // Offered only when there is something to grant. A control that is always
+    // present and usually does nothing teaches people to ignore it, and this
+    // is the one control that must not be ignored.
+    let controls = if capture {
+        row![
+            status_button(
+                crate::glyph::Icon::Response,
+                capture_label,
+                tone_colour(capture_tone, s),
+                Message::AskCapture,
+                s,
+            ),
+            controls,
+        ]
+        .spacing(s.pad(space::TIGHT))
+        .align_y(iced::Alignment::Center)
+    } else {
+        controls
+    };
 
     let telemetry = row![
         fact("Agents", count.to_string(), p.text, s),
@@ -349,7 +384,7 @@ fn fact(
 fn settings_button<'a>(s: Style) -> Element<'a, Message> {
     chrome_button(
         crate::glyph::Icon::Settings,
-        "Settings",
+        "Settings".to_owned(),
         "Preferences",
         Message::ToggleSettings,
         s,
@@ -358,13 +393,15 @@ fn settings_button<'a>(s: Style) -> Element<'a, Message> {
 
 /// One control in the window's own chrome, with the sentence that says what it
 /// does. A glyph with no word beside it is a puzzle.
-fn chrome_button<'a>(
+fn chrome_button(
     icon: crate::glyph::Icon,
-    label: &'a str,
-    _detail: &'a str,
+    // Owned, because one of these labels is computed rather than fixed: the
+    // capture indicator reports what the capture is actually doing.
+    label: String,
+    _detail: &str,
     message: Message,
     s: Style,
-) -> Element<'a, Message> {
+) -> Element<'static, Message> {
     let p = s.palette;
     button(
         row![
@@ -381,6 +418,59 @@ fn chrome_button<'a>(
     .style(move |_, status| utility_style(status, p))
     .padding([s.pad(space::SNUG), s.pad(space::BASE)])
     .into()
+}
+
+/// The one chrome control that carries a state, drawn so the state is visible
+/// before the words are read.
+///
+/// Separate from [`chrome_button`] rather than a colour argument on it, because
+/// every other control in that row is an action with no state to report, and a
+/// tinted Reset would be a colour that means nothing.
+fn status_button(
+    icon: crate::glyph::Icon,
+    label: String,
+    tone: iced::Color,
+    message: Message,
+    s: Style,
+) -> Element<'static, Message> {
+    let p = s.palette;
+    button(
+        row![
+            crate::glyph::view(icon, s.type_size(size::DISPLAY), tone),
+            text(label)
+                .font(theme::STRONG)
+                .size(s.type_size(size::LABEL))
+                .color(tone),
+        ]
+        .spacing(s.pad(space::HAIR))
+        .align_y(iced::Alignment::Center),
+    )
+    .on_press(message)
+    .style(move |_, status| button::Style {
+        border: iced::Border {
+            color: tone,
+            ..utility_style(status, p).border
+        },
+        text_color: tone,
+        ..utility_style(status, p)
+    })
+    .padding([s.pad(space::SNUG), s.pad(space::BASE)])
+    .into()
+}
+
+/// The colour one capture state is drawn in.
+///
+/// `Inactive` stays the ordinary control colour on purpose. Capture being off
+/// is a choice, not a fault, and painting it like a fault would teach people to
+/// ignore the colours that are.
+fn tone_colour(tone: topgent_collect::capture::Tone, s: Style) -> iced::Color {
+    use topgent_collect::capture::Tone;
+    match tone {
+        Tone::Active => s.palette.low,
+        Tone::Pending | Tone::Unknown => s.palette.medium,
+        Tone::Inactive => s.palette.muted,
+        Tone::Unavailable => s.palette.faint,
+    }
 }
 
 fn utility_style(status: button::Status, p: theme::Palette) -> button::Style {
@@ -430,6 +520,9 @@ pub fn table<'a>(
                 // "CRITICAL 100" leaves nothing for the path.
                 table::Cell::tinted(a.grade.clone(), p.grade(&a.grade)),
                 table::Cell::tinted(a.score.to_string(), p.grade(&a.grade)),
+                // A dash rather than a blank: nothing named a model is an
+                // answer, and an empty cell reads as a rendering fault.
+                table::Cell::new(a.model.clone().unwrap_or_else(|| "-".into())),
                 table::Cell::new(a.recognition()),
                 table::Cell::new(a.user.clone().unwrap_or_else(|| "unknown".into())),
                 table::Cell::new(a.pid.to_string()),
@@ -469,10 +562,15 @@ pub fn columns() -> &'static [table::Column2] {
     &COLUMNS
 }
 
-static COLUMNS: [table::Column2; 9] = [
+static COLUMNS: [table::Column2; 10] = [
     table::Column2::text("AGENT", 4),
     table::Column2::text("RISK", 3),
     table::Column2::text("SCORE", 2).number(),
+    // Which model is behind the agent. An alias, never a dated build: only a
+    // provider's response carries that, and Topgent reads neither traffic nor
+    // responses. The column says what was read, and the detail below says
+    // where it was read from.
+    table::Column2::text("MODEL", 4),
     table::Column2::text("IDENTITY", 4),
     table::Column2::text("USER", 2),
     table::Column2::text("PID", 2).number().mono(),
@@ -487,6 +585,8 @@ static COLUMNS: [table::Column2; 9] = [
 /// executable path long enough to fill the window cannot push the control off
 /// the edge. That happened, and a Stop button that cannot be reached is worse
 /// than no Stop button, because the interface still claims to offer it.
+// One row of labelled fields and a control. Same reasoning as the dialog.
+#[allow(clippy::too_many_lines)]
 pub fn detail(agent: &Agent, s: Style) -> Element<'_, Message> {
     let p = s.palette;
     let grade_tint = p.grade(&agent.grade);
@@ -561,6 +661,27 @@ pub fn detail(agent: &Agent, s: Style) -> Element<'_, Message> {
             .spacing(s.pad(space::TIGHT)),
         )
         .width(Length::Fixed(240.0))
+        .clip(true),
+        container(
+            column![
+                text("MODEL")
+                    .font(theme::STRONG)
+                    .size(s.type_size(size::BODY))
+                    .color(p.faint),
+                text(
+                    agent
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| "no model named in this agent's own files".into())
+                )
+                .wrapping(iced::widget::text::Wrapping::None)
+                .font(theme::MONO)
+                .size(s.type_size(size::BODY))
+                .color(p.muted),
+            ]
+            .spacing(s.pad(space::TIGHT)),
+        )
+        .width(Length::Fixed(200.0))
         .clip(true),
         container(
             column![
@@ -917,7 +1038,7 @@ mod tests {
     #[test]
     fn the_column_portions_add_up_to_the_width_they_claim() {
         let total: u16 = COLUMNS.iter().map(|c| c.portion).sum();
-        assert_eq!(total, 29, "a changed portion must be deliberate");
+        assert_eq!(total, 33, "a changed portion must be deliberate");
     }
 
     #[test]

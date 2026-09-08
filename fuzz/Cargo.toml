@@ -90,3 +90,39 @@ name = "config"
 path = "fuzz_targets/config.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "firing"
+path = "fuzz_targets/firing.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "model_signature"
+path = "fuzz_targets/model_signature.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "proc_net"
+path = "fuzz_targets/proc_net.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "handoff"
+path = "fuzz_targets/handoff.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "locals"
+path = "fuzz_targets/locals.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "packet"
+path = "fuzz_targets/packet.rs"
+test = false
+doc = false

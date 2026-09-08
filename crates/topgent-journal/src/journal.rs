@@ -922,6 +922,32 @@ impl Journal {
         f.flush()
     }
 
+    /// Sets the event log aside, so the view starts empty and the record does
+    /// not disappear.
+    ///
+    /// Not a delete. This is a security log: an operator who clears the view
+    /// is asking for a fresh page, not asking to destroy evidence, and a tool
+    /// that quietly did the second when asked for the first would be the wrong
+    /// tool. The current log is renamed with the time it was cleared and a new
+    /// one starts. Every log rotation everywhere works this way.
+    ///
+    /// Returns the path the old log was moved to, or `None` where there was no
+    /// log to move, which is not a failure.
+    ///
+    /// # Errors
+    ///
+    /// Returns the underlying I/O error. A clear that did not happen must not
+    /// report that it did.
+    pub fn archive(&self, at_ms: u64) -> std::io::Result<Option<PathBuf>> {
+        let path = self.path();
+        if !path.exists() {
+            return Ok(None);
+        }
+        let archived = self.dir.join(format!("events-{at_ms}.jsonl"));
+        std::fs::rename(&path, &archived)?;
+        Ok(Some(archived))
+    }
+
     /// The most recent entries, newest first.
     ///
     /// # Errors
@@ -1104,5 +1130,63 @@ impl Journal {
         let lines: Vec<&str> = text.lines().collect();
         let keep = lines.split_at(lines.len() / 2).1.join("\n");
         std::fs::write(&path, format!("{keep}\n"))
+    }
+}
+
+#[cfg(test)]
+mod archive_tests {
+    #![allow(clippy::expect_used, clippy::panic)]
+
+    use super::Journal;
+    use crate::test_support::test_dir;
+
+    /// Clearing the view must not destroy the record.
+    ///
+    /// This is a security log. An operator asking for a fresh page is not
+    /// asking to lose evidence, and a tool that quietly did the second when
+    /// asked for the first would be the wrong tool.
+    #[test]
+    fn clearing_the_log_keeps_the_old_one() -> std::io::Result<()> {
+        let dir = test_dir("journal-archive");
+        let journal = Journal::at(&dir);
+        journal.append(&[crate::Entry {
+            at: 1_000,
+            kind: crate::event_log::Kind::Started,
+            pid: 1,
+            started_at: None,
+            agent: "test".to_owned(),
+            detail: "a line worth keeping".to_owned(),
+            direction: None,
+        }])?;
+        assert_eq!(journal.tail(10)?.len(), 1);
+
+        let archived = journal.archive(7_000)?.expect("the log was moved");
+        assert!(archived.exists(), "the old log is gone");
+        assert!(
+            std::fs::read_to_string(&archived)?.contains("a line worth keeping"),
+            "the old log lost its contents"
+        );
+        assert!(journal.tail(10)?.is_empty(), "the view did not start fresh");
+
+        // Writing again starts a new log rather than reviving the old one.
+        journal.append(&[crate::Entry {
+            at: 8_000,
+            kind: crate::event_log::Kind::Started,
+            pid: 2,
+            started_at: None,
+            agent: "test".to_owned(),
+            detail: "after the clear".to_owned(),
+            direction: None,
+        }])?;
+        assert_eq!(journal.tail(10)?.len(), 1);
+        Ok(())
+    }
+
+    /// Clearing a log that is not there is not a failure.
+    #[test]
+    fn clearing_nothing_is_not_an_error() -> std::io::Result<()> {
+        let dir = test_dir("journal-archive-empty");
+        assert!(Journal::at(&dir).archive(1)?.is_none());
+        Ok(())
     }
 }

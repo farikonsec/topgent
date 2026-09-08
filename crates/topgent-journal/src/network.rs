@@ -21,6 +21,7 @@ pub(crate) fn network_record_json(record: &NetworkRecord) -> Value {
         "first_seen": record.first_seen,
         "last_seen": record.last_seen,
         "observations": record.observations,
+        "packets": record.packets,
         "sample_times": record.sample_times,
         "currently_observed": record.currently_observed,
         "last_visibility_change": record.last_visibility_change,
@@ -77,6 +78,9 @@ pub(crate) fn network_record_from_json(value: &Value) -> Option<NetworkRecord> {
         first_seen,
         last_seen,
         observations: value.get("observations")?.as_u64()?,
+        // Absent in a history written before capture existed, which is not a
+        // corrupt record: it is a record from a build that could not count.
+        packets: value.get("packets").and_then(Value::as_u64),
         sample_times,
         currently_observed: value
             .get("currently_observed")
@@ -119,6 +123,7 @@ mod tests {
             first_seen: 2_000,
             last_seen: 3_000,
             observations: 4,
+            packets: None,
             sample_times: vec![2_000, 2_500, 3_000],
             currently_observed: true,
             last_visibility_change: 2_000,
@@ -146,6 +151,7 @@ mod tests {
             first_seen: 2_000,
             last_seen: 3_000,
             observations: 2,
+            packets: None,
             sample_times: vec![2_000, 3_000],
             currently_observed: false,
             last_visibility_change: 3_000,

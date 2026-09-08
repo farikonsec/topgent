@@ -135,6 +135,62 @@ pub struct Endpoint {
     /// `None` means no counter exists here. It never means zero traffic, and it
     /// is never a count of how often Topgent saw the endpoint.
     pub bytes: Option<ByteCounters>,
+    /// Packets a capture counted moving to or from this destination.
+    ///
+    /// `None` means no capture ran, or none saw this endpoint. It never means
+    /// zero traffic, and it is never a count of sweeps. The unit is packets
+    /// and not bytes: the capture reads only the front of each frame, so a
+    /// volume is a measurement nobody took.
+    pub packets: Option<u64>,
+    /// How this destination came to be known, sorted and deduplicated.
+    ///
+    /// Never empty. An endpoint with only `Attempted` is one no sweep ever saw
+    /// a socket for, which is exactly the case a snapshot cannot report and the
+    /// one a fast agent relies on.
+    pub sightings: Vec<Sighting>,
+}
+
+/// How a destination came to be known.
+///
+/// The distinction that decides whether fast, deliberate activity is visible
+/// at all. A held socket is the only thing a snapshot can see, and an agent
+/// that connects, does its business and disconnects inside one sweep leaves
+/// nothing behind for it. The kernel recorded the attempt and the teardown;
+/// this is what stops the fold throwing those records away.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Sighting {
+    /// A socket was open at the moment of a sweep.
+    Held,
+    /// The operating system recorded an attempt to connect.
+    ///
+    /// Weaker than a held socket and more useful: it is present whether or not
+    /// the connection succeeded, and it survives the connection being gone.
+    Attempted,
+    /// The operating system recorded the connection being torn down.
+    ///
+    /// Proof that a connection existed and has ended, which no snapshot of the
+    /// present can supply.
+    Closed,
+    /// Packets were seen on the wire.
+    ///
+    /// The strongest of the four. A held socket says a connection exists, an
+    /// attempt says one was asked for, a teardown says one ended; only this
+    /// says traffic actually moved, and it is the only one that appears for a
+    /// protocol no socket listing reports.
+    Captured,
+}
+
+impl Sighting {
+    /// The word a report prints.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Held => "held",
+            Self::Attempted => "attempted",
+            Self::Closed => "closed",
+            Self::Captured => "captured",
+        }
+    }
 }
 
 /// A connector the agent declares it may call.
@@ -396,7 +452,84 @@ impl AgentGraph {
 }
 
 /// What is known about one endpoint while a fold is in progress.
-type EndpointFacts = (Direction, Option<UnixMillis>, Option<ByteCounters>);
+///
+/// Named fields rather than a tuple: this accumulates one thing per source of
+/// evidence, and a fifth positional element would have made every call site a
+/// puzzle about which index meant what.
+#[derive(Debug)]
+struct EndpointFacts {
+    /// Which way the connection goes, as most recently stated.
+    direction: Direction,
+    /// Earliest creation time any collector reported.
+    opened_at: Option<UnixMillis>,
+    /// Largest counter reading any collector reported.
+    bytes: Option<ByteCounters>,
+    /// Packets a capture counted, summed across flows to this destination.
+    packets: Option<u64>,
+    /// Every way this destination came to be known.
+    sightings: Vec<Sighting>,
+}
+
+impl EndpointFacts {
+    /// A destination nothing is yet known about beyond which way it goes.
+    fn new(direction: Direction) -> Self {
+        Self {
+            direction,
+            opened_at: None,
+            bytes: None,
+            packets: None,
+            sightings: Vec::new(),
+        }
+    }
+
+    /// Adds one way of having seen this destination.
+    fn note(&mut self, seen: Sighting) {
+        if !self.sightings.contains(&seen) {
+            self.sightings.push(seen);
+        }
+    }
+}
+
+/// Records how a destination was seen, joining it to a stated protocol when
+/// one is already known for the same host, port and direction.
+///
+/// An audit record names a host and a port and not a protocol. Creating a
+/// second endpoint for the same destination under `Unstated` would report one
+/// connection as two, so an existing stated entry wins and only a destination
+/// nothing has ever held a socket to gets an `Unstated` one of its own.
+///
+/// A capture does state a protocol, so it goes straight to its own key and
+/// never has to guess which existing entry it belongs to.
+fn note_sighting<'a>(
+    b: &'a mut Builder,
+    protocol: Protocol,
+    host: &str,
+    port: u16,
+    direction: Direction,
+    seen: Sighting,
+) -> &'a mut EndpointFacts {
+    let dir = direction_key(direction);
+    if !protocol.is_stated()
+        && let Some((key, _)) = b.endpoints.iter().find(|((stated, h, p, d), _)| {
+            stated.is_stated() && h == host && *p == port && *d == dir
+        })
+    {
+        let key = key.clone();
+        let entry = b
+            .endpoints
+            .entry(key)
+            .or_insert_with(|| EndpointFacts::new(direction));
+        entry.note(seen);
+        return entry;
+    }
+    let entry = b
+        .endpoints
+        .entry((protocol, host.to_owned(), port, dir))
+        .or_insert_with(|| EndpointFacts::new(direction));
+    entry.direction = direction;
+    entry.note(seen);
+    entry
+}
 
 /// Working state for one agent while folding.
 #[derive(Default)]
@@ -637,6 +770,10 @@ fn anchored_identities(facts: &[Fact]) -> std::collections::BTreeSet<AgentId> {
     seen.intersection(&named).copied().collect()
 }
 
+// One arm per claim variant, in the order the vocabulary declares them.
+// Splitting it would scatter the fold across helpers without making any one
+// of them clearer, and the exhaustive match is the point.
+#[allow(clippy::too_many_lines)]
 fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
     let probe = fact.provenance().probe.as_str();
     match fact.claim() {
@@ -675,16 +812,17 @@ fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
             let entry = b
                 .endpoints
                 .entry(key)
-                .or_insert((*direction, *opened_at, *bytes));
-            entry.0 = *direction;
-            entry.1 = match (entry.1, *opened_at) {
+                .or_insert_with(|| EndpointFacts::new(*direction));
+            entry.note(Sighting::Held);
+            entry.direction = *direction;
+            entry.opened_at = match (entry.opened_at, *opened_at) {
                 (Some(kept), Some(seen)) => Some(kept.min(seen)),
                 (kept, seen) => kept.or(seen),
             };
             // Counters only rise for the life of a connection, so the largest
             // reading is the current one. A collector without counters must not
             // erase one from a collector that has them.
-            entry.2 = match (entry.2, *bytes) {
+            entry.bytes = match (entry.bytes, *bytes) {
                 (Some(kept), Some(seen)) => Some(ByteCounters {
                     sent: kept.sent.max(seen.sent),
                     received: kept.received.max(seen.received),
@@ -692,12 +830,70 @@ fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
                 (kept, seen) => kept.or(seen),
             };
         }
-        // A lookup, a teardown and a filtering decision are all events in
-        // time. None of them is a standing property of the agent, so none of
-        // them belongs in the graph; the activity timeline is their home.
-        Claim::SocketClosed { .. }
-        | Claim::ConnectionAttempt { .. }
-        | Claim::DnsQueryObserved { .. } => {}
+        // A connection that has ended, and one that was only attempted, are
+        // the two records a snapshot can never produce. They used to be
+        // discarded here on the grounds that an event is not a standing
+        // property of the agent, which is true and was the wrong conclusion:
+        // an agent that connects, acts and disconnects inside one sweep is
+        // invisible without them, and that is precisely the agent worth
+        // seeing. Each folds into the destination it names, carrying how it
+        // was seen so nothing later mistakes an attempt for a live socket.
+        //
+        // Neither record states a protocol. `Protocol::Unstated` says so
+        // rather than assuming TCP, and the merge below joins it to a stated
+        // one when a sweep also saw a socket to the same destination.
+        Claim::SocketClosed {
+            host,
+            port,
+            direction,
+            ..
+        } => {
+            note_sighting(
+                b,
+                Protocol::Unstated,
+                host,
+                *port,
+                *direction,
+                Sighting::Closed,
+            );
+        }
+        Claim::ConnectionAttempt {
+            host,
+            port,
+            direction,
+            ..
+        } => {
+            note_sighting(
+                b,
+                Protocol::Unstated,
+                host,
+                *port,
+                *direction,
+                Sighting::Attempted,
+            );
+        }
+        // A capture is the only source that proves packets moved rather than
+        // that a socket existed, and the only one that names UDP and ICMP
+        // peers at all. It states its own protocol, so it never has to be
+        // merged into somebody else's entry.
+        Claim::TrafficObserved {
+            protocol,
+            host,
+            port,
+            direction,
+            packets,
+            ..
+        } => {
+            let entry = note_sighting(b, *protocol, host, *port, *direction, Sighting::Captured);
+            // Summed, not replaced. Each drain reports the interval since the
+            // last one, so a second sweep's count is further traffic and not a
+            // restatement of the first.
+            entry.packets = Some(entry.packets.unwrap_or(0).saturating_add(*packets));
+        }
+        // A resolved name is not a destination: it has no port and no
+        // direction, and folding it in would invent an endpoint nothing
+        // connected to. The activity timeline remains its home.
+        Claim::DnsQueryObserved { .. } => {}
         Claim::FileTouched { path, access } => {
             let r = b.resources.entry(resource_key(path, home)).or_default();
             r.observed = Tri::Yes;
@@ -759,6 +955,8 @@ const fn direction_key(d: Direction) -> u8 {
     }
 }
 
+// One block per field of the finished agent. Same reasoning as `apply`.
+#[allow(clippy::too_many_lines)]
 fn finish(id: AgentId, b: Builder) -> Agent {
     // A resource the agent's own config never mentions is `No`, not `Unknown`,
     // but only once we have seen that it HAS a config to mention things in.
@@ -803,16 +1001,20 @@ fn finish(id: AgentId, b: Builder) -> Agent {
     let mut endpoints: Vec<Endpoint> = b
         .endpoints
         .into_iter()
-        .map(
-            |((protocol, host, port, _), (direction, opened_at, bytes))| Endpoint {
+        .map(|((protocol, host, port, _), mut facts)| {
+            facts.sightings.sort_unstable();
+            facts.sightings.dedup();
+            Endpoint {
                 protocol,
                 host,
                 port,
-                direction,
-                opened_at,
-                bytes,
-            },
-        )
+                direction: facts.direction,
+                opened_at: facts.opened_at,
+                bytes: facts.bytes,
+                packets: facts.packets,
+                sightings: facts.sightings,
+            }
+        })
         .collect();
     endpoints.sort_by(|a, b| (&a.host, a.port, a.protocol).cmp(&(&b.host, b.port, b.protocol)));
 

@@ -123,6 +123,36 @@ pub enum Claim {
         /// Operating-system filtering decision.
         outcome: ConnectionOutcome,
     },
+    /// Traffic between the subject and an endpoint was seen on the wire.
+    ///
+    /// Weaker than [`Claim::SocketOpen`] in what it asserts and stronger in
+    /// what it proves. It does not say a socket exists now, because a capture
+    /// sees packets and not sockets; it does say packets actually moved,
+    /// which a socket listing never does.
+    ///
+    /// It exists because neither of the two neighbouring claims can carry
+    /// this. `SocketOpen` would assert a live socket for a flow whose socket
+    /// may be long gone, and `ConnectionAttempt` names no protocol, which
+    /// would throw away the UDP and ICMP visibility a capture exists to add.
+    ///
+    /// The counts are packets, never bytes. The capture reads only the front
+    /// of each frame, so a volume is a measurement nobody here took.
+    TrafficObserved {
+        /// Which protocol carried it.
+        protocol: Protocol,
+        /// The other end.
+        host: String,
+        /// The other end's port, or zero where the protocol has none.
+        port: u16,
+        /// Which way it went, decided by which end is this host.
+        direction: Direction,
+        /// Packets counted in this flow.
+        packets: u64,
+        /// When the first was seen.
+        first_seen: UnixMillis,
+        /// When the most recent was seen.
+        last_seen: UnixMillis,
+    },
     /// The subject asked the resolver to look up a name.
     ///
     /// Only emitted where the operating system names the process that asked.
@@ -243,6 +273,7 @@ impl Claim {
             Self::SocketOpen { .. } => "socket_open",
             Self::SocketClosed { .. } => "socket_closed",
             Self::ConnectionAttempt { .. } => "connection_attempt",
+            Self::TrafficObserved { .. } => "traffic_observed",
             Self::DnsQueryObserved { .. } => "dns_query_observed",
             Self::FileTouched { .. } => "file_touched",
             Self::PermissionDeclared { .. } => "permission_declared",

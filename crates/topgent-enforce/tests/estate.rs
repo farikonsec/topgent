@@ -173,7 +173,7 @@ fn secrets(e: &Estate) {
 }
 
 #[test]
-fn an_agent_with_shell_broad_write_and_credentials_in_reach_is_critical() {
+fn an_agent_with_shell_broad_write_and_credentials_in_reach_is_high_not_critical() {
     let mut e = Estate::new("critical");
     e.write(".claude/settings.json", FULL_PERMISSIONS);
     secrets(&e);
@@ -189,7 +189,13 @@ fn an_agent_with_shell_broad_write_and_credentials_in_reach_is_critical() {
 
     assert_eq!(agent.family.as_deref(), Some("claude-code"));
     assert_eq!(agent.identity, IdentityKind::DelegatedHuman);
-    assert_eq!(risk.grade, Grade::Critical, "factors: {:#?}", risk.factors);
+    // HIGH rather than CRITICAL, and deliberately so. Declared capabilities
+    // plus credentials the account can reach is serious, but nothing has been
+    // observed happening. The top band is now reserved for behaviour: a
+    // credential actually opened, a persistence location written, Topgent's
+    // own files modified. Before the rebalance this agent was CRITICAL and so
+    // was every other agent on the host, which made the band meaningless.
+    assert_eq!(risk.grade, Grade::High, "factors: {:#?}", risk.factors);
 
     let codes: Vec<&str> = risk.factors.iter().map(|f| f.code.as_str()).collect();
     assert!(codes.contains(&"ARBITRARY_EXECUTION"), "{codes:?}");
@@ -249,7 +255,11 @@ fn a_local_model_server_holds_its_own_identity_and_scores_lower_for_it() {
     // The same two credentials are in reach, but a service identity is worth
     // less to an attacker, so the same evidence scores lower.
     assert_eq!(risk.identity_multiplier, 75);
-    assert_eq!(risk.score, 20, "15 + 12, each at 75%: {:#?}", risk.factors);
+    // 6 + 2 at 75%, after the rebalance that made reachability context rather
+    // than the score. The property under test is the multiplier, not the
+    // weights, and it still holds: the same evidence is worth less under a
+    // service identity.
+    assert_eq!(risk.score, 5, "6 + 2, each at 75%: {:#?}", risk.factors);
 }
 
 #[test]

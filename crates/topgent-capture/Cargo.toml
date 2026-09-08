@@ -1,0 +1,20 @@
+[package]
+name = "topgent-capture"
+description = "The one privileged part: reads packet headers and hands them over. Nothing else in Topgent needs the capability."
+version.workspace = true
+publish.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "topgent-capture"
+path = "src/main.rs"
+
+[dependencies]
+topgent-collect = { path = "../topgent-collect" }
+serde_json = "1"
+
+[lints]
+workspace = true

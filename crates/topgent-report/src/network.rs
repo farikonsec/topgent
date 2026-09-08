@@ -125,6 +125,10 @@ pub(crate) fn network_json(
                 "first_seen": record.first_seen,
                 "last_seen": record.last_seen,
                 "observations": record.observations,
+                // Traffic, not visibility. `observations` counts sweeps that
+                // saw the tuple; this counts packets that actually moved, and
+                // is absent where no capture ran.
+                "packets": record.packets,
                 "time_series": {
                     "detector_version": "1",
                     "evidence": "socket_snapshot_visibility",
