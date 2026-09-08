@@ -58,11 +58,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Windows packet capture links against wpcap. The SDK is headers and
+      # import libraries; the driver is the operator's and Topgent installs
+      # none.
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
 
       # The suite runs again here rather than trusting that CI already passed.
@@ -119,11 +122,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Windows packet capture links against wpcap. The SDK is headers and
+      # import libraries; the driver is the operator's and Topgent installs
+      # none.
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
       - name: Build the application
         run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-ui
@@ -198,11 +204,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Windows packet capture links against wpcap. The SDK is headers and
+      # import libraries; the driver is the operator's and Topgent installs
+      # none.
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
       - name: Build the application
         run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-ui
@@ -237,11 +246,14 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      # Windows packet capture links against wpcap. The SDK is headers and
+      # import libraries; the driver is the operator's and Topgent installs
+      # none.
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
       # The window is drawn natively and loads xkbcommon and the Wayland client
       # at run time, but the X11 and udev crates in the dependency tree resolve
