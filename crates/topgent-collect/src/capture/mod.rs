@@ -390,6 +390,10 @@ pub fn revoke_step() -> Option<String> {
 /// Built from the same place the grant is, so the two can never drift into
 /// pointing at different binaries.
 #[cfg(target_os = "linux")]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "matches the other platforms, which have nothing to return"
+)]
 fn revoke_command() -> Option<String> {
     Some(format!("sudo setcap -r {}", platform::grant_target()))
 }
