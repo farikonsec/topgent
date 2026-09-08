@@ -1,0 +1,36 @@
+name: Npcap SDK
+description: >
+  Put the Npcap SDK where the linker can find it. Windows packet capture links
+  against wpcap, and the SDK is headers and import libraries only. It is not
+  the driver: the driver is installed by the operator on the machine that
+  captures, and Topgent never installs one.
+
+runs:
+  using: composite
+  steps:
+    # Pinned by version and checked by digest. This is a third-party download
+    # entering a build, so the URL alone is not enough: a changed file is a
+    # changed build, and the job stops rather than linking against something
+    # nobody looked at.
+    - name: Fetch and verify the SDK
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = "Stop"
+        $url    = "https://npcap.com/dist/npcap-sdk-1.16.zip"
+        $sha    = "F0A8BE7778EE3AE1B99BBBECB27A3FF0F6C111A4093F1C78C5C5A099607184DB"
+        $zip    = Join-Path $env:RUNNER_TEMP "npcap-sdk.zip"
+        $sdk    = Join-Path $env:RUNNER_TEMP "npcap-sdk"
+        $ProgressPreference = "SilentlyContinue"
+        Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+        $got = (Get-FileHash $zip -Algorithm SHA256).Hash
+        if ($got -ne $sha) { throw "npcap-sdk digest is $got, expected $sha" }
+        Expand-Archive -Path $zip -DestinationPath $sdk -Force
+
+    # Both architectures, because the release builds x64 and ARM64 from the
+    # same runner and the linker picks whichever matches the target.
+    - name: Point the linker at it
+      shell: pwsh
+      run: |
+        $sdk = Join-Path $env:RUNNER_TEMP "npcap-sdk"
+        $lib = "$sdk\Lib\x64;$sdk\Lib\ARM64;$sdk\Lib;$env:LIB"
+        "LIB=$lib" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append

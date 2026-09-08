@@ -221,6 +221,16 @@ git clone https://github.com/farikonsec/topgent && cd topgent
 cargo build --release && ./target/release/topgent
 ```
 
+**Building on Windows** additionally needs the [Npcap SDK](https://npcap.com/#download),
+which is headers and import libraries for the capture backend. Unzip it and
+point the linker at it before building. It is not the driver, and it is only
+needed to build:
+
+```powershell
+$env:LIB = "$HOME\npcap-sdk\Lib\ARM64;" + $env:LIB   # or Lib\x64
+cargo build --release
+```
+
 Verify the release archive against `SHA256SUMS` before execution:
 
 ```sh

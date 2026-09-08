@@ -20,7 +20,7 @@ const FIB_TRIE: &str = "Main:
            /8 host LOCAL
         |-- 127.0.0.1
            /32 host LOCAL
-     |-- 192.168.64.2
+     |-- 198.51.100.2
         /32 host LOCAL
 Local:
      |-- 127.0.0.1
@@ -31,7 +31,7 @@ Local:
 fn reads_the_host_addresses() {
     let found = parse_fib_trie(FIB_TRIE);
     assert!(found.contains(&Ipv4Addr::LOCALHOST));
-    assert!(found.contains(&Ipv4Addr::new(192, 168, 64, 2)));
+    assert!(found.contains(&Ipv4Addr::new(198, 51, 100, 2)));
 }
 
 /// The loopback network appears with the same marker as an address.

@@ -58,6 +58,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Npcap SDK
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/npcap-sdk
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
@@ -116,6 +119,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Npcap SDK
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/npcap-sdk
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
@@ -192,6 +198,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Npcap SDK
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/npcap-sdk
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
@@ -228,6 +237,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+      - name: Npcap SDK
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/npcap-sdk
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
