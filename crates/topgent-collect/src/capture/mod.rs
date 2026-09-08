@@ -254,6 +254,8 @@ pub fn indicator() -> (String, Tone) {
     match state {
         State::Available => match live::status().as_str() {
             "running" => ("Packet capture: on".to_owned(), Tone::Active),
+            // Switched off by somebody, which is a choice and not a fault.
+            "off" => ("Packet capture: off".to_owned(), Tone::Inactive),
             "not started" => (
                 "Packet capture: permitted, starting at next sweep".to_owned(),
                 Tone::Pending,
@@ -326,6 +328,76 @@ impl Granted {
             Self::NotAttempted { .. } => "not_attempted",
         }
     }
+}
+
+/// Hands the capability back, through the operating system's own prompt.
+///
+/// The mirror of [`grant`], and it exists because a capability that is easier
+/// to switch on than off is a bad bargain. Stopping the capture is instant and
+/// needs no password; this is the stronger step, which removes the permission
+/// from the binary so nothing can start it again without asking.
+///
+/// Only ever runs where a command granted it in the first place. macOS grants
+/// through group membership and Windows through an installed driver, and
+/// neither is Topgent's to take away.
+#[must_use]
+pub fn revoke() -> Granted {
+    let Some(command) = revoke_command() else {
+        return Granted::NotAttempted {
+            reason: "on this platform the permission was not granted by Topgent, so it is \
+                     not Topgent's to remove"
+                .to_owned(),
+        };
+    };
+    match elevate(&command) {
+        Ok(output) => {
+            // Rechecked, never assumed, exactly as the grant is. A command
+            // that exits zero and changes nothing must not be reported as a
+            // capability that has gone.
+            if matches!(
+                probe(),
+                State::NeedsGrant { .. } | State::Unsupported { .. }
+            ) {
+                Granted::Yes
+            } else {
+                Granted::NoChange { detail: output }
+            }
+        }
+        Err(reason) => {
+            if reason.declined {
+                Granted::Declined
+            } else {
+                Granted::NotAttempted {
+                    reason: reason.detail,
+                }
+            }
+        }
+    }
+}
+
+/// The command that hands the capability back, for a dialog to show.
+///
+/// `None` where the permission was not Topgent's to give and so is not its to
+/// take: macOS grants through group membership, Windows through an installed
+/// driver.
+#[must_use]
+pub fn revoke_step() -> Option<String> {
+    revoke_command()
+}
+
+/// The step that hands the capability back, where there is one.
+///
+/// Built from the same place the grant is, so the two can never drift into
+/// pointing at different binaries.
+#[cfg(target_os = "linux")]
+fn revoke_command() -> Option<String> {
+    Some(format!("sudo setcap -r {}", platform::grant_target()))
+}
+
+/// See the Linux note. Nothing here was granted by Topgent.
+#[cfg(not(target_os = "linux"))]
+const fn revoke_command() -> Option<String> {
+    None
 }
 
 /// Asks the operating system to grant the capability, through its own prompt.

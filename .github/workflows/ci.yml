@@ -23,9 +23,9 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2.9.2
-      # Windows packet capture links against wpcap. The SDK is headers and
-      # import libraries; the driver is the operator's and Topgent installs
-      # none.
+      # Windows capture links against wpcap. The SDK is headers and import
+      # libraries only, so the job builds and tests exactly what ships. The
+      # driver stays the operator's and Topgent installs none.
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk
@@ -112,6 +112,9 @@ jobs:
         with:
           toolchain: "1.95.0"
       - uses: Swatinem/rust-cache@v2.9.2
+      # Windows capture links against wpcap. The SDK is headers and import
+      # libraries only, so the job builds and tests exactly what ships. The
+      # driver stays the operator's and Topgent installs none.
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk

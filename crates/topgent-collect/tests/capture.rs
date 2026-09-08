@@ -198,3 +198,32 @@ fn a_world_writable_helper_is_refused() {
 
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Turning capture off has to actually turn it off.
+///
+/// The interface used to offer a way to switch this capability on and no way
+/// to switch it back off, which is a bad bargain in a tool whose whole claim
+/// is that it takes no privilege it does not need. Stopping needs no password,
+/// takes effect at once, and is remembered so a sweep does not quietly start
+/// it again.
+#[test]
+fn capture_can_be_switched_off_and_back_on() {
+    use topgent_collect::capture::live;
+
+    live::stop();
+    assert!(live::stopped_by_operator(), "the choice was not remembered");
+    assert!(!live::running(), "it is still reading packets");
+    assert_eq!(live::status(), "off");
+
+    // Starting again may still fail for want of a permission, which is a
+    // different answer from "switched off" and has to read differently.
+    let _ = live::start();
+    assert!(
+        !live::stopped_by_operator(),
+        "starting did not clear the choice"
+    );
+    assert_ne!(live::status(), "off");
+
+    // Left as it was found.
+    live::stop();
+}

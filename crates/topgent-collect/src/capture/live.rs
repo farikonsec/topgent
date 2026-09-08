@@ -19,7 +19,7 @@
 //! counters that could not be turned into flows become the collector's own
 //! health rather than disappearing.
 
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use topgent_facts::{Claim, Confidence, Fact, Subject};
 
@@ -78,45 +78,104 @@ impl Source {
     }
 }
 
-/// The process-wide capture, started at most once.
-fn cell() -> &'static OnceLock<Result<Source, CollectError>> {
-    static SESSION: OnceLock<OnceLock<Result<Source, CollectError>>> = OnceLock::new();
-    SESSION.get_or_init(OnceLock::new)
+/// What the operator has asked for, and what is running because of it.
+///
+/// A capture that can only be started is a bad bargain. Whatever else this
+/// tool is, it should never be easier to switch a privileged capability on
+/// than off, so the wanted flag lives here and stopping is one call away.
+#[derive(Debug, Default)]
+struct Held {
+    /// Whether the operator wants packets read at all.
+    ///
+    /// `true` by default where the capability is present: somebody who granted
+    /// it did so in order to use it. Turning it off is remembered, so a
+    /// restart does not quietly switch it back on.
+    wanted: Option<bool>,
+    /// The running capture, if there is one.
+    source: Option<Result<Source, CollectError>>,
 }
 
-/// Starts the capture if it has not been started, and reports what happened.
+fn held() -> &'static Mutex<Held> {
+    static HELD: OnceLock<Mutex<Held>> = OnceLock::new();
+    HELD.get_or_init(|| Mutex::new(Held::default()))
+}
+
+/// Starts the capture unless the operator has turned it off.
 ///
-/// Safe to call on every sweep: the first call decides, and every later one
-/// returns that decision.
+/// Safe to call on every sweep. It starts at most one capture, leaves a
+/// failure in place rather than retrying a question whose answer cannot change
+/// without a restart, and does nothing at all once somebody has stopped it.
 ///
 /// The helper is tried first and only where it exists. Falling back rather
 /// than failing matters: a build run from a source tree has no helper beside
 /// it, and refusing to capture there would make the feature untestable in the
 /// place it is most often changed.
-pub fn ensure() -> &'static Result<Source, CollectError> {
-    cell().get_or_init(|| match helper::Helper::start() {
+fn ensure_started(guard: &mut Held) {
+    if guard.wanted == Some(false) || guard.source.is_some() {
+        return;
+    }
+    guard.source = Some(match helper::Helper::start() {
         Ok(helper) => Ok(Source::Helper(helper)),
         Err(_) => Session::start().map(Source::InProcess),
-    })
+    });
+}
+
+/// Stops the capture and remembers that it was stopped.
+///
+/// Immediate and needing no password, because stopping is not a privileged
+/// act. Dropping the source kills the helper and joins its threads, so when
+/// this returns nothing is reading packets.
+pub fn stop() {
+    let mut guard = held().lock().unwrap_or_else(PoisonError::into_inner);
+    guard.wanted = Some(false);
+    guard.source = None;
+}
+
+/// Starts the capture again after it was stopped.
+///
+/// # Errors
+///
+/// Whatever starting it returned, so a caller can say why it did not come
+/// back rather than showing a control that appears to do nothing.
+pub fn start() -> Result<(), CollectError> {
+    let mut guard = held().lock().unwrap_or_else(PoisonError::into_inner);
+    guard.wanted = Some(true);
+    guard.source = None;
+    ensure_started(&mut guard);
+    match guard.source.as_ref() {
+        Some(Err(error)) => Err(error.clone()),
+        _ => Ok(()),
+    }
+}
+
+/// Whether the operator has turned the capture off.
+#[must_use]
+pub fn stopped_by_operator() -> bool {
+    held().lock().unwrap_or_else(PoisonError::into_inner).wanted == Some(false)
 }
 
 /// Whether packets are being read right now.
 ///
 /// Asked by the interface, which must never say a capture is running when it
 /// is not. A session that died answers `false` here, the same as one that
-/// never started.
+/// never started and the same as one somebody switched off.
 #[must_use]
 pub fn running() -> bool {
-    matches!(cell().get(), Some(Ok(session)) if session.ended().is_none())
+    let guard = held().lock().unwrap_or_else(PoisonError::into_inner);
+    matches!(guard.source.as_ref(), Some(Ok(source)) if source.ended().is_none())
 }
 
 /// One line describing the capture as it actually is.
 #[must_use]
 pub fn status() -> String {
-    match cell().get() {
+    let guard = held().lock().unwrap_or_else(PoisonError::into_inner);
+    if guard.wanted == Some(false) {
+        return "off".to_owned();
+    }
+    match guard.source.as_ref() {
         None => "not started".to_owned(),
         Some(Err(error)) => format!("not running: {error}"),
-        Some(Ok(session)) => session.ended().map_or_else(
+        Some(Ok(source)) => source.ended().map_or_else(
             || "running".to_owned(),
             |detail| format!("stopped: {detail}"),
         ),
@@ -230,13 +289,31 @@ impl Collector for CaptureCollector {
     /// granted is [`CollectError::Denied`] every sweep, which is what puts a
     /// row in the coverage table saying so instead of leaving a silent gap.
     fn collect(&self, clock: &dyn Clock) -> Result<Vec<Fact>, CollectError> {
+        let mut guard = held().lock().unwrap_or_else(PoisonError::into_inner);
+        // Somebody turned it off. That is not a failure and not a gap in
+        // coverage the operator does not know about: it is a choice, reported
+        // as one.
+        if guard.wanted == Some(false) {
+            return Err(CollectError::Unavailable {
+                what: "packet capture is switched off".to_owned(),
+            });
+        }
         // Whether this sweep is the one that started the capture. Asked before
         // starting it, because afterwards there is no way to tell.
-        let first = cell().get().is_none();
+        let first = guard.source.is_none();
         if let Ok(mut started) = self.started_here.lock() {
             *started = first;
         }
-        let session = ensure().as_ref().map_err(Clone::clone)?;
+        ensure_started(&mut guard);
+        let session = match guard.source.as_ref() {
+            Some(Ok(source)) => source,
+            Some(Err(error)) => return Err(error.clone()),
+            None => {
+                return Err(CollectError::Unavailable {
+                    what: "packet capture did not start".to_owned(),
+                });
+            }
+        };
         if let Some(detail) = session.ended() {
             return Err(CollectError::Unavailable { what: detail });
         }

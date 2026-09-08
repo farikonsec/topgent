@@ -36,6 +36,12 @@ pub struct Settings {
     pub notify: bool,
     /// Whether a notification also makes a sound.
     pub sound: bool,
+    /// Whether packet capture may run.
+    ///
+    /// On by default, because a permission somebody granted was granted in
+    /// order to be used. Kept here so that switching it off survives a
+    /// restart: an off switch that forgets is not an off switch.
+    pub capture: bool,
 }
 
 impl Default for Settings {
@@ -46,6 +52,7 @@ impl Default for Settings {
             scale: 1.0,
             refresh_ms: 5_000,
             notify: true,
+            capture: true,
             sound: false,
         }
     }
@@ -462,6 +469,7 @@ mod tests {
             scale: 1.25,
             refresh_ms: 15_000,
             notify: false,
+            capture: false,
             sound: true,
         };
         let raw = serde_json::to_string(&chosen).expect("settings serialise");

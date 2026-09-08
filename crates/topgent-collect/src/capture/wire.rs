@@ -231,11 +231,13 @@ fn driver_present() -> Result<(), CollectError> {
     })
 }
 
-/// See the Windows note. Every other platform ships its capture library.
+/// See the Windows note. macOS ships its capture library, so there is nothing
+/// to check.
 ///
-/// Kept as a `Result` so the call sites read the same everywhere. One platform
-/// having nothing to check is not a reason for the others to grow an arm.
-#[cfg(not(all(windows, target_env = "msvc")))]
+/// Kept as a `Result` so the call sites read the same on both platforms that
+/// have a backend. It exists only where one does: on Linux there is no pcap
+/// and nothing to call it, which Linux points out and macOS does not.
+#[cfg(target_os = "macos")]
 #[expect(
     clippy::unnecessary_wraps,
     reason = "matches the Windows signature so callers need no platform arms"
@@ -441,9 +443,9 @@ impl Wire {
     ///
     /// # Errors
     ///
-    /// Always [`CollectError::Unavailable`]. Windows needs a capture driver
-    /// installed rather than a permission changed, which is what the capture
-    /// offer already says there.
+    /// Always [`CollectError::Unavailable`]. No other platform has a backend
+    /// in this build, and the capture offer says so rather than implying a
+    /// permission would help.
     pub fn open() -> Result<Self, CollectError> {
         Err(CollectError::Unavailable {
             what: "this build captures packets on Linux and macOS only".to_owned(),

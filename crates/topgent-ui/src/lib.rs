@@ -279,6 +279,12 @@ pub enum Message {
     AskCapture,
     /// Close it without asking for anything.
     CancelCapture,
+    /// Stop reading packets now. No password, immediate.
+    StopCapture,
+    /// Start reading packets again after it was stopped.
+    StartCapture,
+    /// Hand the capability back, through the operating system's own prompt.
+    RevokeCapture,
     /// Ask the operating system for the capability, through its own prompt.
     GrantCapture,
     /// What the operating system answered, and whether capture is now available.
@@ -344,6 +350,9 @@ fn clears_status(message: &Message) -> bool {
             | Message::CancelStop
             | Message::ClearEvents
             | Message::EventsCleared(..)
+            | Message::StopCapture
+            | Message::StartCapture
+            | Message::RevokeCapture
             | Message::AskCapture
             | Message::CancelCapture
             | Message::GrantCapture
@@ -366,7 +375,16 @@ impl App {
             swept_at: None,
             draft: Draft::default(),
             raised: std::collections::HashMap::new(),
-            settings: settings::Settings::load(),
+            settings: {
+                let loaded = settings::Settings::load();
+                // Applied before the first sweep, so a capture somebody
+                // switched off last time does not run for a few seconds
+                // before the interface catches up with itself.
+                if !loaded.capture {
+                    topgent_collect::capture::live::stop();
+                }
+                loaded
+            },
             overlay: Overlay::None,
             split: Pane::layout(),
             compact: false,
@@ -485,6 +503,36 @@ impl App {
                 // Swept immediately, so the table empties in front of the
                 // person who pressed the button rather than at the next tick.
                 Task::perform(report::sweep(), |r| Message::Swept(Box::new(r)))
+            }
+            // Stopping is not privileged and is not slow: it drops the
+            // capture, which kills the helper and joins its threads. Doing it
+            // on the drawing thread is fine and keeps the button honest,
+            // because when it returns nothing is reading packets.
+            Message::StopCapture => {
+                topgent_collect::capture::live::stop();
+                // Remembered on disk, not just for this run. An off switch
+                // that forgets by the next launch is not an off switch.
+                self.settings.capture = false;
+                self.settings.save();
+                self.capture_outcome = Some("Packet capture is off.".to_owned());
+                Task::none()
+            }
+            Message::StartCapture => {
+                self.settings.capture = true;
+                self.settings.save();
+                self.capture_outcome = Some(match topgent_collect::capture::live::start() {
+                    Ok(()) => "Packet capture is on.".to_owned(),
+                    Err(error) => format!("It did not start: {error}"),
+                });
+                Task::none()
+            }
+            // Off the drawing thread, like the grant: the elevation helper puts
+            // a password prompt on screen and blocks until it is answered.
+            Message::RevokeCapture => {
+                self.capture_outcome = Some("Asking the system\u{2026}".to_owned());
+                Task::perform(report::revoke_capture(), |(done, message)| {
+                    Message::CaptureGranted(done, message)
+                })
             }
             Message::AskCapture => {
                 self.overlay = Overlay::Capture;

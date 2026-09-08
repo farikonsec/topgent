@@ -160,7 +160,7 @@ fn grant_remedy(target: &str) -> Remedy {
 /// window, a policy engine and a journal in it. Wireshark grants `dumpcap` and
 /// not Wireshark for exactly this reason.
 #[cfg(target_os = "linux")]
-fn grant_target() -> String {
+pub(super) fn grant_target() -> String {
     helper_path().map_or_else(
         || {
             // Printed in a command for a person to run. Nothing executes it here.

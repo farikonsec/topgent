@@ -221,15 +221,18 @@ git clone https://github.com/farikonsec/topgent && cd topgent
 cargo build --release && ./target/release/topgent
 ```
 
-**Building on Windows** additionally needs the [Npcap SDK](https://npcap.com/#download),
+**Building on Windows** needs the [Npcap SDK](https://npcap.com/#download),
 which is headers and import libraries for the capture backend. Unzip it and
-point the linker at it before building. It is not the driver, and it is only
-needed to build:
+point the linker at it. It is not the driver, and it is only needed to build:
 
 ```powershell
 $env:LIB = "$HOME\npcap-sdk\Lib\ARM64;" + $env:LIB   # or Lib\x64
 cargo build --release
 ```
+
+The resulting binary runs on a machine with no capture driver installed. The
+library is loaded on first use rather than at start, so Topgent runs normally
+and reports capture as unsupported until Npcap is installed.
 
 Verify the release archive against `SHA256SUMS` before execution:
 

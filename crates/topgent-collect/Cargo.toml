@@ -37,9 +37,16 @@ socket2 = { version = "0.6", default-features = false, features = ["all"] }
 [target."cfg(target_os = \"macos\")".dependencies]
 pcap = "2"
 
-# Windows capture goes through Npcap, which presents the same API. Building
-# against it needs the Npcap SDK, which is headers and import libraries rather
-# than the driver; the driver is the operator's to install, and the capture
-# offer says so.
+# Windows capture goes through Npcap, which presents the same API.
+#
+# Always built, never optional. A feature flag would mean the Windows job in
+# continuous integration compiled a different program from the one released,
+# so the capture code would ship untested on the platform it is hardest to get
+# right. The build machines get the SDK instead, which is headers and import
+# libraries and about a megabyte.
+#
+# The SDK is not the driver. The driver is the operator's, installed from
+# Npcap's own signed installer, and the library is delay loaded so a machine
+# without it runs Topgent normally and reports capture as unsupported.
 [target."cfg(windows)".dependencies]
 pcap = "2"

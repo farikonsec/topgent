@@ -413,6 +413,25 @@ pub async fn grant_capture() -> (bool, String) {
 /// signal arriving is where a reused pid would be stopped in place of the
 /// process someone meant, and closing it is the core's job, not this one's.
 ///
+/// Hand the capture capability back, off the drawing thread.
+pub async fn revoke_capture() -> (bool, String) {
+    use topgent_collect::capture::Granted;
+    match tokio::task::spawn_blocking(topgent_collect::capture::revoke).await {
+        Ok(Granted::Yes) => (true, "Permission removed. Capture is off.".to_owned()),
+        Ok(Granted::Declined) => (false, "Cancelled. Nothing changed.".to_owned()),
+        Ok(Granted::NoChange { detail }) => (
+            false,
+            if detail.is_empty() {
+                "That ran and the permission is still there.".to_owned()
+            } else {
+                format!("That ran and the permission is still there. {detail}")
+            },
+        ),
+        Ok(Granted::NotAttempted { reason }) => (false, reason),
+        Err(_) => (false, "The elevation thread failed.".to_owned()),
+    }
+}
+
 /// Set the event log aside, off the drawing thread.
 pub async fn clear_events() -> String {
     tokio::task::spawn_blocking(topgent_report::clear_event_log)
