@@ -4,7 +4,7 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
-## [0.8.1] - 2026-09-08
+## [0.5.1] - 2026-09-08
 
 Hardening of the one part of Topgent that holds a privilege. Everything below
 was measured on macOS, Kali and Windows 11.
@@ -201,8 +201,8 @@ The Linux desktop build is withheld. Tauri renders its Linux window through GTK3
 
 Documented in `THREAT-MODEL.md` and the Limits section of `README.md`. No pre-execution blocking on macOS or Windows, no per-extension attribution within a shared editor process, and no telemetry the platform does not supply.
 
-[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.8.1...HEAD
-[0.8.1]: https://github.com/farikonsec/topgent/compare/v0.5.0...v0.8.1
+[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/farikonsec/topgent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/farikonsec/topgent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/farikonsec/topgent/compare/v0.2.2...v0.4.0
 [0.2.2]: https://github.com/farikonsec/topgent/compare/v0.2.1...v0.2.2

@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/topgent-facts", "crates/topgent-evidence", "crates/topgent-policy", "crates/topgent-core", "crates/topgent-collect", "crates/topgent-capture", "crates/topgent-enforce", "crates/topgent-journal", "crates/topgent-export", "crates/topgent-report", "crates/topgent-lab", "crates/topgent-verify", "crates/topgent-cli", "crates/topgent-ui"]
 
 [workspace.package]
-version = "0.8.1"
+version = "0.5.1"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"
