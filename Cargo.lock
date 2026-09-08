@@ -4224,7 +4224,7 @@ name = "topgent-evidence"
 version = "0.5.0"
 dependencies = [
  "ed25519-dalek",
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "sha2",
  "topgent-facts",
 ]
@@ -4282,7 +4282,7 @@ dependencies = [
 name = "topgent-report"
 version = "0.5.0"
 dependencies = [
- "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "serde_json",
  "topgent-collect",
  "topgent-core",
