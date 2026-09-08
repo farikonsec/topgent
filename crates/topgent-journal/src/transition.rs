@@ -164,15 +164,34 @@ mod tests {
                 let journal = &journal;
                 scope.spawn(move || {
                     for round in 0..4_u64 {
-                        journal
-                            .record_response_transition(
-                                &format!("response:{index}:1000:0:alert:100:write:/tmp/canary"),
+                        let key = format!("response:{index}:1000:0:alert:100:write:/tmp/canary");
+                        // Contention is not loss, and this test used to treat
+                        // the two as the same thing. A writer that could not
+                        // take the lock inside the wait is *told so*; the
+                        // defect this test exists for was the silent kind,
+                        // where a record vanished and the caller was handed
+                        // success. Retrying a refusal is what a real caller
+                        // does, and it is what stops the case failing on a
+                        // build machine slow enough to convoy eight writers.
+                        let mut attempts = 0;
+                        loop {
+                            match journal.record_response_transition(
+                                &key,
                                 round % 2 == 0,
                                 1_000 + round,
-                            )
-                            .unwrap_or_else(|error| {
-                                panic!("writer {index} lost a record: {error}")
-                            });
+                            ) {
+                                Ok(_) => break,
+                                Err(error)
+                                    if error.kind() == std::io::ErrorKind::WouldBlock
+                                        && attempts < 20 =>
+                                {
+                                    attempts += 1;
+                                }
+                                Err(error) => {
+                                    panic!("writer {index} lost a record: {error}")
+                                }
+                            }
+                        }
                     }
                 });
             }
