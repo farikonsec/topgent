@@ -68,8 +68,6 @@ jobs:
         uses: ./.github/actions/npcap-sdk
         with:
           target: ${{ matrix.target }}
-        with:
-          target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
 
       # The suite runs again here rather than trusting that CI already passed.
@@ -134,8 +132,6 @@ jobs:
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk
-        with:
-          target: ${{ matrix.target }}
         with:
           target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
@@ -222,8 +218,6 @@ jobs:
         uses: ./.github/actions/npcap-sdk
         with:
           target: ${{ matrix.target }}
-        with:
-          target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
       - name: Build the application
         run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-ui
@@ -266,8 +260,6 @@ jobs:
       - name: Npcap SDK
         if: runner.os == 'Windows'
         uses: ./.github/actions/npcap-sdk
-        with:
-          target: ${{ matrix.target }}
         with:
           target: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2.9.2
