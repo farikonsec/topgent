@@ -207,6 +207,43 @@ impl std::fmt::Debug for Wire {
     }
 }
 
+/// Refuses before anything touches the capture library.
+///
+/// On Windows the library is delay loaded, so the first call into it is what
+/// resolves `wpcap.dll`. If the driver is not installed that resolution fails
+/// inside the loader, which raises a structured exception no Rust code can
+/// catch: the process would die rather than report that capture is
+/// unavailable. So the file is checked first, and nothing calls into pcap
+/// until it is there.
+///
+/// macOS ships the library, so there is nothing to check.
+#[cfg(all(windows, target_env = "msvc"))]
+fn driver_present() -> Result<(), CollectError> {
+    let root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_owned());
+    for relative in ["System32\\Npcap\\wpcap.dll", "System32\\wpcap.dll"] {
+        if std::path::Path::new(&root).join(relative).exists() {
+            return Ok(());
+        }
+    }
+    Err(CollectError::Unavailable {
+        what: "no packet-capture driver is installed, so there is nothing to capture with"
+            .to_owned(),
+    })
+}
+
+/// See the Windows note. Every other platform ships its capture library.
+///
+/// Kept as a `Result` so the call sites read the same everywhere. One platform
+/// having nothing to check is not a reason for the others to grow an arm.
+#[cfg(not(all(windows, target_env = "msvc")))]
+#[expect(
+    clippy::unnecessary_wraps,
+    reason = "matches the Windows signature so callers need no platform arms"
+)]
+const fn driver_present() -> Result<(), CollectError> {
+    Ok(())
+}
+
 /// Most interfaces opened at once.
 ///
 /// A Mac with more than this has virtual interfaces nobody is watching agents
@@ -223,6 +260,7 @@ impl Wire {
     /// [`CollectError::Denied`] where the capture devices cannot be opened,
     /// which is what an account outside the `access_bpf` group sees.
     pub fn open() -> Result<Self, CollectError> {
+        driver_present()?;
         let device = pcap::Device::lookup()
             .map_err(|error| CollectError::Unavailable {
                 what: format!("no capture device could be looked up: {error}"),
@@ -242,6 +280,7 @@ impl Wire {
     /// to open. A device that fails while others succeed is skipped: one
     /// unreadable virtual interface must not cost the whole capture.
     pub fn open_all() -> Result<Vec<Self>, CollectError> {
+        driver_present()?;
         let devices = pcap::Device::list().map_err(|error| CollectError::Unavailable {
             what: format!("the capture devices could not be listed: {error}"),
         })?;

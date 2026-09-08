@@ -61,6 +61,21 @@ pub fn probe() -> State {
     // There is no restart state here either. A file capability applies at the
     // next exec, and the helper is exec'd fresh every time it starts, so a
     // grant is in force the moment it is made.
+    // A helper that exists and cannot be trusted is its own answer. Silently
+    // falling through to the in-process test would report the interface's
+    // capability for a machine whose helper is the thing that is wrong.
+    if let Some(unsafe_helper) = installed_helper()
+        && !super::helper::safe_to_run(&unsafe_helper)
+    {
+        return State::Unsupported {
+            reason: format!(
+                "{} is writable by an account other than its owner, so Topgent will not \
+                 run it. Restore it with: chmod 755 {}",
+                unsafe_helper.display(),
+                unsafe_helper.display()
+            ),
+        };
+    }
     if let Some(helper) = helper_path() {
         return if has_capability(&helper) {
             State::Available
@@ -159,7 +174,18 @@ fn grant_target() -> String {
     )
 }
 
-/// The capture helper beside this binary, if it is installed.
+/// The capture helper beside this binary, whether or not it is safe to run.
+#[cfg(target_os = "linux")]
+fn installed_helper() -> Option<std::path::PathBuf> {
+    // nosemgrep: rust.lang.security.current-exe.current-exe
+    let path = std::env::current_exe()
+        .ok()?
+        .parent()?
+        .join("topgent-capture");
+    path.is_file().then_some(path)
+}
+
+/// The capture helper beside this binary, if it is installed and safe to run.
 #[cfg(target_os = "linux")]
 fn helper_path() -> Option<std::path::PathBuf> {
     // The path locates a sibling file; that file is checked before it is run.
@@ -168,7 +194,11 @@ fn helper_path() -> Option<std::path::PathBuf> {
         .ok()?
         .parent()?
         .join("topgent-capture");
-    path.is_file().then_some(path)
+    // The same check that decides whether it will be run. Without this the
+    // probe answered "available" for a helper the runtime then refused, which
+    // is the one thing this module promises never to do: report a capability
+    // that will not work.
+    (path.is_file() && super::helper::safe_to_run(&path)).then_some(path)
 }
 
 /// Whether the capability is on the binary itself.

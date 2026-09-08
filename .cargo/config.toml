@@ -1,0 +1,20 @@
+# Windows loads the capture library lazily, or not at all.
+#
+# Linking wpcap the ordinary way puts it in the import table, and Windows
+# resolves an import table before a program's first instruction runs. A machine
+# without Npcap would therefore fail to start Topgent at all, with a loader
+# error and no message worth reading, and capture is meant to be optional and
+# off until somebody turns it on. That is not a capture that is off. That is a
+# tool that does not run.
+#
+# Delay loading moves the resolution to the first call. Nothing calls into the
+# library unless `wpcap.dll` is present, which the capture probe checks first,
+# so on a machine without the driver the import is never resolved and the
+# program behaves exactly as it did before capture existed.
+#
+# `delayimp.lib` provides the helper the linker generates the stub against.
+[target.'cfg(all(windows, target_env = "msvc"))']
+rustflags = [
+  "-Clink-arg=/DELAYLOAD:wpcap.dll",
+  "-Clink-arg=delayimp.lib",
+]
