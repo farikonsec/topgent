@@ -59,7 +59,15 @@ pub(crate) fn benchmark_command(args: &[String]) -> i32 {
     };
     let fixture = staged.clone();
 
-    let truth_path = scratch(&format!("topgent-truth-{}.json", std::process::id()));
+    // Inside a directory this run created, so the fixture writes the ground
+    // truth to a path no other account could have got to first.
+    let truth_path = match scratch("topgent-truth") {
+        Ok(directory) => directory.join("truth.json"),
+        Err(reason) => {
+            eprintln!("topgent lab benchmark: {reason}");
+            return 2;
+        }
+    };
 
     let mut child = match spawn_fixture(&fixture, &truth_path, hold_ms) {
         Ok(child) => child,
@@ -170,14 +178,14 @@ fn benchmark_collectors() -> Vec<Box<dyn topgent_collect::Collector>> {
     collectors
 }
 
-/// A path under the system temporary directory, named by this process.
+/// A private directory under the system temporary directory.
 ///
-/// Both callers are lab scaffolding: a ground-truth file the benchmark writes
-/// and reads back within one run, and a directory the fixture is staged into.
-/// Neither is a trust boundary, and both are named by pid so two runs cannot
-/// collide.
-fn scratch(name: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(name) // nosemgrep: rust.lang.security.temp-dir.temp-dir - lab scaffolding named by pid, not a trust boundary
+/// Named by this process is not good enough. A process id is small, visible to
+/// every account on the host, and reused, so the path can be worked out and
+/// created first as a symlink. The name is random and the create is exclusive
+/// instead; see `topgent_lab::scratch`.
+fn scratch(prefix: &str) -> Result<std::path::PathBuf, String> {
+    topgent_lab::scratch::private_dir(prefix)
 }
 
 /// Puts the fixture where the sweep will or will not recognise it.
@@ -190,9 +198,7 @@ fn stage(fixture: &std::path::Path, recognised: bool) -> Result<std::path::PathB
     if !recognised {
         return Ok(fixture.to_path_buf());
     }
-    let directory = scratch(&format!("topgent-bench-agent-{}", std::process::id()));
-    std::fs::create_dir_all(&directory)
-        .map_err(|error| format!("{}: {error}", directory.display()))?;
+    let directory = scratch("topgent-bench-agent")?;
     let staged = directory.join("claude");
     std::fs::copy(fixture, &staged).map_err(|error| format!("{}: {error}", staged.display()))?;
     Ok(staged)

@@ -385,6 +385,17 @@ pub fn revoke_step() -> Option<String> {
     revoke_command()
 }
 
+/// A grant on this host that is wider than capture needs, if there is one.
+///
+/// Not an error and not a refusal: capture works in both cases this reports.
+/// It is the difference between a capability the operator meant to give and
+/// one that is also available to everyone else on the machine, and a monitor
+/// that will not say so is a monitor keeping a permission problem to itself.
+#[must_use]
+pub fn exposure() -> Option<String> {
+    platform::exposure()
+}
+
 /// The step that hands the capability back, where there is one.
 ///
 /// Built from the same place the grant is, so the two can never drift into

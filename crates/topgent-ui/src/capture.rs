@@ -196,6 +196,17 @@ pub fn dialog<'a>(
         );
     }
 
+    // Last, above the buttons: a working install that is wider than it needs
+    // to be. It is not a reason capture is unavailable, so it does not go in
+    // the state block, and it is not hidden either.
+    if let Some(detail) = topgent_collect::capture::exposure() {
+        body = body.push(
+            text(detail)
+                .size(s.type_size(size::MICRO))
+                .color(p.critical),
+        );
+    }
+
     body = body.push(actions);
 
     container(

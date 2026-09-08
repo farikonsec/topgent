@@ -4,6 +4,29 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-08
+
+Hardening of the one part of Topgent that holds a privilege. Everything below
+was measured on macOS, Kali and Windows 11.
+
+### Fixed
+
+- **The capture helper was in no release archive.** `release.yml` built `topgent-cli` and `topgent-ui` and never `topgent-capture`, so nobody using a release had a helper beside the binary. The grant then fell back to `current_exe()` and put the capability on the interface, which is the large program the split exists to keep it off. Both Linux archives now carry the helper at mode 0750.
+- **`cap_net_admin` was granted and never used.** Wireshark's documented grant carries it because `dumpcap` sets promiscuous mode. Nothing in this build writes an interface flag. Verified on Kali: with `cap_net_raw` alone the helper reads frames and attributes them.
+- **The advice for an unusable helper was `chmod 755`**, which is the state the new warning reports. It now says `chmod 0750`.
+- **Two predictable paths under `/tmp`.** `topgent benchmark` and the lab fixture both built a name from the process id and called `create_dir_all`, which adopts whatever it finds, including a symlink another account planted first. Process ids are small, visible and reused. Names are now random and the create is exclusive, in `topgent_lab::scratch`.
+- **Three commands panicked on an argument that is not valid text.** `std::env::args` panics by contract, and a Unix path is bytes, so `topgent policy check --input <path>` could take one it would not accept. Reproduced: exit 101 and a panic before, exit 2 and a sentence after.
+
+### Added
+
+- **A report for a grant wider than capture needs.** Two conditions, neither of which stops capture: a helper carrying the capability that every account on the host can execute, and a capability left on the interface by an earlier version. Shown in `topgent capture status`, in its `--json`, and in the capture dialog. Neither changes the exit code.
+
+### Changed
+
+- Semgrep findings already annotated in source are no longer uploaded to code scanning. GitHub ingests SARIF `suppressions` as open alerts, so twenty-two annotations that each carry a written reason sat in the Security tab as unresolved findings. The gate is unchanged: `scan.sh --only semgrep` still runs with `--error` and fails the build on anything unsuppressed.
+- The README no longer claims Topgent uses Wireshark's `dumpcap` arrangement without qualification. `dumpcap` dissects nothing; Topgent's helper parses headers inside the privileged process. The parse is safe Rust, bounded to 256 bytes and fuzzed. Moving it out is on the roadmap.
+
+
 ## [0.5.0] - 2026-09-08
 
 Packet capture, on all three operating systems, and the machinery to say
@@ -178,7 +201,8 @@ The Linux desktop build is withheld. Tauri renders its Linux window through GTK3
 
 Documented in `THREAT-MODEL.md` and the Limits section of `README.md`. No pre-execution blocking on macOS or Windows, no per-extension attribution within a shared editor process, and no telemetry the platform does not supply.
 
-[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/farikonsec/topgent/compare/v0.5.0...v0.8.1
 [0.5.0]: https://github.com/farikonsec/topgent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/farikonsec/topgent/compare/v0.2.2...v0.4.0
 [0.2.2]: https://github.com/farikonsec/topgent/compare/v0.2.1...v0.2.2

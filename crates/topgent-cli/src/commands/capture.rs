@@ -22,10 +22,19 @@ pub(crate) fn capture_command(args: &[String]) -> i32 {
     }
     let offer = topgent_collect::capture::offer();
 
+    let exposure = topgent_collect::capture::exposure();
+
     if args.iter().any(|argument| argument == "--json") {
-        println!("{}", as_json(&offer));
+        println!("{}", as_json(&offer, exposure.as_deref()));
     } else {
         println!("{offer}");
+        // After the offer, because it is a note about a working install rather
+        // than a reason capture is unavailable. It does not change the exit
+        // code for the same reason: nothing here stops capture.
+        if let Some(detail) = &exposure {
+            println!();
+            println!("Wider than it needs to be: {detail}");
+        }
     }
 
     match offer.state {
@@ -40,7 +49,7 @@ pub(crate) fn capture_command(args: &[String]) -> i32 {
 }
 
 /// The offer as data, for the interface and for a pipeline.
-fn as_json(offer: &topgent_collect::capture::Offer) -> serde_json::Value {
+fn as_json(offer: &topgent_collect::capture::Offer, exposure: Option<&str>) -> serde_json::Value {
     use topgent_collect::capture::{Remedy, State};
     let mut row = serde_json::json!({
         "state": offer.state.as_str(),
@@ -48,6 +57,7 @@ fn as_json(offer: &topgent_collect::capture::Offer) -> serde_json::Value {
         "privilege": offer.privilege,
         "gains": offer.gains,
         "limits": offer.limits,
+        "exposure": exposure,
     });
     // Built through the map rather than through indexing. `Value`'s index
     // operator panics on a shape it did not expect, and a status command that

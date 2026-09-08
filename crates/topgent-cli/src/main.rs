@@ -40,9 +40,12 @@ Full command reference: https://github.com/farikonsec/topgent
 ";
 
 fn main() {
-    // Reading argv is what a command-line tool does; every value is matched against a
-    // fixed set below.
-    let args: Vec<String> = std::env::args().skip(1).collect(); // nosemgrep: rust.lang.security.args.args
+    // Reading argv is what a command-line tool does; every value is matched
+    // against a fixed set below.
+    let Some(args) = arguments() else {
+        eprintln!("topgent: an argument is not valid text, and every option this tool takes is");
+        std::process::exit(2);
+    };
 
     if args.iter().any(|a| a == "--help" || a == "-h") {
         print!("{USAGE}");
@@ -149,4 +152,23 @@ fn main() {
         return;
     }
     render::render(show_facts);
+}
+
+/// The command line as text, or nothing when one argument is not text.
+///
+/// `std::env::args` panics on an argument that is not valid Unicode, and on
+/// any Unix a file path is a bag of bytes, so a real path can be handed in
+/// that it will not accept. Panicking while reading your own command line is a
+/// poor answer from a tool that reports on other software. Converting lossily
+/// is worse: a mangled path names a different file, and the tool would then
+/// read the wrong one and say nothing about it. So it refuses instead.
+fn arguments() -> Option<Vec<String>> {
+    // The rule fires on reading argv at all, which is the one thing a
+    // command-line tool has to do. Every value is matched against a fixed set
+    // below and none of them reaches a shell.
+    // nosemgrep: rust.lang.security.args-os.args-os
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| argument.into_string().ok())
+        .collect()
 }

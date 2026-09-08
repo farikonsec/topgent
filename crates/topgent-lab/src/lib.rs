@@ -11,6 +11,7 @@ pub mod bench;
 pub mod contract;
 pub mod overclaim;
 pub mod scenario;
+pub mod scratch;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

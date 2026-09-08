@@ -97,14 +97,23 @@ volume per endpoint.
 
 | Platform | Needs | How |
 |---|---|---|
-| Linux | `CAP_NET_RAW` on the helper | `sudo setcap cap_net_raw,cap_net_admin+eip ./topgent-capture` |
+| Linux | `CAP_NET_RAW` on the helper | `sudo setcap cap_net_raw+eip ./topgent-capture` |
 | macOS | Read access to `/dev/bpf*` | The `ChmodBPF` helper shipped with Wireshark |
 | Windows | The Npcap driver | Npcap's own signed installer |
 
 Topgent does not install any driver and does not change any permission for you.
 
-A helper process, `topgent-capture`, holds the capability for the privileged
-part. It reads frames, prints them, and exits when its parent goes away.
+A helper process, `topgent-capture`, holds the capability. It reads frames,
+prints them, and exits when its parent goes away. The interface holds nothing.
+Wireshark splits `dumpcap` out for the same reason, though not in the same way:
+`dumpcap` dissects nothing, and Topgent's helper parses headers itself. That
+parse is safe Rust, bounded to 256 bytes and fuzzed, and moving it out of the
+privileged process is on the [roadmap](ROADMAP.md).
+
+Ship it with the helper beside the binary. If it is missing, the grant falls
+back to the interface, which puts the capability on the larger program. Built
+from source, `chmod 0750 topgent-capture` before granting, so the only account
+that can open a raw socket is yours.
 
 Packet capture reads network headers only. The buffer holds the front of each
 frame and the kernel discards the rest, so no payload reaches the process.

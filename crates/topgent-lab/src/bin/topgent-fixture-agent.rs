@@ -59,7 +59,9 @@ fn main() {
 fn run() -> Result<(), String> {
     // Reading argv is what a command-line tool does; every value is matched
     // against a fixed set below.
-    let args: Vec<String> = std::env::args().skip(1).collect(); // nosemgrep: rust.lang.security.args.args
+    let args = arguments().ok_or_else(|| {
+        "an argument is not valid text, and every option this tool takes is".to_owned()
+    })?;
     match option(&args, "--child-report") {
         Some(report) => child(&args, report),
         None => root(&args),
@@ -186,7 +188,7 @@ fn root(args: &[String]) -> Result<(), String> {
     let started_at_ms = now_ms();
     let root_pid = std::process::id();
 
-    let workspace = workspace(root_pid)?;
+    let workspace = workspace()?;
     let resources = prepare_resources(&workspace)?;
     let (listener, datagram, sockets) = open_sockets()?;
     let report = workspace.join("processes.txt");
@@ -243,11 +245,13 @@ const fn parent_of_root() -> u32 {
 }
 
 /// Creates the temporary directory this run works inside.
-fn workspace(root_pid: u32) -> Result<PathBuf, String> {
-    // nosemgrep: rust.lang.security.temp-dir.temp-dir - a fixture workspace, not a trust boundary
-    let path = std::env::temp_dir().join(format!("topgent-fixture-{root_pid}"));
-    std::fs::create_dir_all(&path).map_err(|error| format!("{}: {error}", path.display()))?;
-    Ok(path)
+///
+/// Named at random rather than by process id. The fixture writes a ground
+/// truth here that the benchmark then scores against, so a path another
+/// account could have created first is a path another account could have
+/// decided the result of.
+fn workspace() -> Result<PathBuf, String> {
+    topgent_lab::scratch::private_dir("topgent-fixture")
 }
 
 /// Writes one readable file and one the account should not be able to read.
@@ -342,4 +346,23 @@ fn read_report(report: &Path) -> Result<Vec<TruthProcess>, String> {
     processes.sort_by_key(|process| process.pid);
     processes.dedup_by_key(|process| process.pid);
     Ok(processes)
+}
+
+/// The command line as text, or nothing when one argument is not text.
+///
+/// `std::env::args` panics on an argument that is not valid Unicode, and on
+/// any Unix a file path is a bag of bytes, so a real path can be handed in
+/// that it will not accept. Panicking while reading your own command line is a
+/// poor answer from a tool that reports on other software. Converting lossily
+/// is worse: a mangled path names a different file, and the tool would then
+/// read the wrong one and say nothing about it. So it refuses instead.
+fn arguments() -> Option<Vec<String>> {
+    // The rule fires on reading argv at all, which is the one thing a
+    // command-line tool has to do. Every value is matched against a fixed set
+    // below and none of them reaches a shell.
+    // nosemgrep: rust.lang.security.args-os.args-os
+    std::env::args_os()
+        .skip(1)
+        .map(|argument| argument.into_string().ok())
+        .collect()
 }

@@ -7,15 +7,21 @@
 //! no files, and no network of its own. It is the only binary that needs the
 //! capture capability, and it is deliberately the smallest one.
 //!
-//! This is Wireshark's arrangement. The capability goes on `dumpcap`, which
-//! does nothing but read frames; the interface reads what it writes and holds
-//! no privilege at all. The interface is the large, complicated, frequently
-//! changed program, and it is exactly the one that must not hold a raw socket.
+//! The capability goes here rather than on the interface, which is the large,
+//! complicated, frequently changed program and exactly the one that must not
+//! hold a raw socket. Wireshark splits `dumpcap` out for that reason.
+//!
+//! It is not the whole of Wireshark's arrangement. `dumpcap` dissects nothing:
+//! it writes raw pcap and every parser runs unprivileged somewhere else. This
+//! program parses headers itself, so bytes off the wire are read inside the
+//! process holding the socket. The parse is safe Rust in a crate that forbids
+//! `unsafe`, it is bounded by a 256-byte buffer, and it is fuzzed at
+//! `fuzz/fuzz_targets/packet.rs`. Moving it out is on the roadmap.
 //!
 //! # Granting it
 //!
 //! ```text
-//! sudo setcap cap_net_raw,cap_net_admin+eip /path/to/topgent-capture
+//! sudo setcap cap_net_raw+eip /path/to/topgent-capture
 //! ```
 //!
 //! On macOS and Windows there is nothing to grant here: access comes from

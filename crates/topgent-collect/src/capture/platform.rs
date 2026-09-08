@@ -70,7 +70,7 @@ pub fn probe() -> State {
         return State::Unsupported {
             reason: format!(
                 "{} is writable by an account other than its owner, so Topgent will not \
-                 run it. Restore it with: chmod 755 {}",
+                 run it. Restore it with: chmod 0750 {}",
                 unsafe_helper.display(),
                 unsafe_helper.display()
             ),
@@ -141,10 +141,17 @@ fn raw_socket_permitted() -> Result<bool, String> {
 }
 
 /// The one step that grants capture, for whichever binary needs it.
+///
+/// `cap_net_raw` and nothing else. Wireshark's documented grant also carries
+/// `cap_net_admin`, which it needs to put an interface into promiscuous mode.
+/// Nothing in this build does that: the socket is opened, frames are read as
+/// they arrive, and no interface flag is ever written. Granting a capability
+/// the code cannot use is a capability available to anything that later runs
+/// this binary, so it is not granted.
 #[cfg(target_os = "linux")]
 fn grant_remedy(target: &str) -> Remedy {
     Remedy::Command {
-        command: format!("sudo setcap cap_net_raw,cap_net_admin+eip {target}"),
+        command: format!("sudo setcap cap_net_raw+eip {target}"),
         effect: "grants that one binary the ability to open raw sockets. Topgent still \
                  runs as your user and gains nothing else."
             .to_owned(),
@@ -199,6 +206,55 @@ fn helper_path() -> Option<std::path::PathBuf> {
     // is the one thing this module promises never to do: report a capability
     // that will not work.
     (path.is_file() && super::helper::safe_to_run(&path)).then_some(path)
+}
+
+/// Something granted on this host that is wider than it needs to be.
+///
+/// Two conditions, both of which a working install can be in, and neither of
+/// which stops capture. They are reported rather than corrected: the fix is a
+/// permission change on somebody's machine, and Topgent asks rather than acts.
+///
+/// The first is a helper anyone on the host can execute while it carries the
+/// capability, which makes a raw socket available to every account. `chmod`
+/// does not clear a file capability, so tightening the mode costs nothing.
+///
+/// The second is a capability left on the interface itself. Before the helper
+/// shipped in the archives, the grant fell back to the interface, and an
+/// upgrade leaves that behind on the old file. Capture now runs through the
+/// helper, so the interface keeps a raw socket it no longer uses.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub(super) fn exposure() -> Option<String> {
+    if let Some(path) = installed_helper()
+        && has_capability(&path)
+        && super::helper::runnable_by_others(&path)
+    {
+        return Some(format!(
+            "{} carries the capture capability and every account on this host can run \
+             it. Restrict it with: sudo chmod 0750 {}",
+            path.display(),
+            path.display()
+        ));
+    }
+    if installed_helper().is_some() && binary_has_capability() {
+        // nosemgrep: rust.lang.security.current-exe.current-exe
+        let exe = std::env::current_exe().ok()?;
+        return Some(format!(
+            "{} still carries the capture capability from an earlier grant. Capture now \
+             runs through the helper beside it, so the interface no longer needs one. \
+             Remove it with: sudo setcap -r {}",
+            exe.display(),
+            exe.display()
+        ));
+    }
+    None
+}
+
+/// See the Linux note. Nothing on these platforms is granted per file.
+#[cfg(not(target_os = "linux"))]
+#[must_use]
+pub(super) const fn exposure() -> Option<String> {
+    None
 }
 
 /// Whether the capability is on the binary itself.

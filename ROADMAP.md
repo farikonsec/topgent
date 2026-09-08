@@ -21,6 +21,13 @@ Version 0.1.0 targets Apple silicon and Intel on macOS, x86-64 and ARM64 on Wind
 
 ## Next
 
+- **Move packet parsing out of the privileged process.** `dumpcap` writes raw
+  pcap and every dissector runs unprivileged somewhere else. Topgent's helper
+  parses headers itself, so bytes off the wire are read while holding the raw
+  socket. Mitigated today by safe Rust, a 256-byte bound and a fuzz target;
+  the fix is for the helper to ship frames and the parent to parse them, which
+  changes the handoff format.
+
 - **Code-signing certificates.** The macOS application ships ad-hoc signed. Gatekeeper reports an unverified developer on first launch and the user approves it once in System Settings. A Developer ID certificate removes that step. The Windows application ships unpacked and unsigned. SmartScreen warns on first launch.
 
 - **Additional verified agents.** Nineteen agent families are defined. Each requires a verified installation per platform. Unmarked cells in the README table indicate unverified platforms, not unsupported ones.

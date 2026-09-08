@@ -78,6 +78,13 @@ jobs:
 
       - run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-cli
 
+      # The privileged helper, on the one platform that has a capability to
+      # grant. Without it in the archive there is no helper beside the binary,
+      # the grant falls back to the interface itself, and the separation this
+      # release documents exists only for people who build from source.
+      - run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-capture
+        if: runner.os == 'Linux'
+
       - name: Package
         shell: bash
         run: |
@@ -86,6 +93,13 @@ jobs:
           name="topgent-${{ matrix.target }}"
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/topgent${{ matrix.ext }}" "dist/$name/"
+          if [ "$RUNNER_OS" = Linux ]; then
+            cp "target/${{ matrix.target }}/release/topgent-capture" "dist/$name/"
+            # Not world-executable. A capability goes on this file, and a file
+            # anyone on the host can run is a raw socket anyone on the host can
+            # open. Debian ships dumpcap the same way, 0750 rather than 0755.
+            chmod 0750 "dist/$name/topgent-capture"
+          fi
           cp README.md LICENSE NOTICE "dist/$name/"
           cd dist
           if [ "$RUNNER_OS" = Windows ]; then
@@ -273,6 +287,11 @@ jobs:
             pkg-config libx11-dev libxkbcommon-dev libwayland-dev libudev-dev
       - name: Build the application
         run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-ui
+      # The application looks for the capture helper beside itself and nowhere
+      # else, so the helper has to be in the same archive or the grant lands on
+      # the application instead.
+      - name: Build the capture helper
+        run: cargo build --release --locked --target ${{ matrix.target }} -p topgent-capture
       - name: Package
         shell: bash
         run: |
@@ -282,6 +301,9 @@ jobs:
           mkdir -p "dist/$name"
           cp "target/${{ matrix.target }}/release/topgent-ui" "dist/$name/Topgent"
           chmod +x "dist/$name/Topgent"
+          cp "target/${{ matrix.target }}/release/topgent-capture" "dist/$name/"
+          # Not world-executable. See the note in the command-line job.
+          chmod 0750 "dist/$name/topgent-capture"
           cp README.md LICENSE NOTICE "dist/$name/"
           # An icon and a desktop entry. Windows links the .ico as a resource
           # and macOS carries an .icns in the bundle, so Linux was the only

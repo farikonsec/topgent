@@ -175,6 +175,31 @@ pub fn safe_to_run(path: &std::path::Path) -> bool {
     !writable_by_others && (owner == 0 || owner == rustix::process::getuid().as_raw())
 }
 
+/// Whether every account on this host can execute the file.
+///
+/// A capability is on the file, not on a session, so a capability-bearing
+/// binary that anyone can run is a raw socket anyone can open. Debian ships
+/// `dumpcap` as `0750 root:wireshark` for this reason, and Topgent's own
+/// archives set `0750` on the helper. A build from source gets Cargo's `0755`,
+/// and an operator who granted before this release still has one, so the
+/// condition is detected and reported rather than assumed away.
+///
+/// Group execute is deliberately allowed: it is how the file reaches the one
+/// account that should have it. Only the other bit is a finding.
+#[cfg(unix)]
+#[must_use]
+pub fn runnable_by_others(path: &std::path::Path) -> bool {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::metadata(path).is_ok_and(|metadata| metadata.permissions().mode() & 0o001 != 0)
+}
+
+/// See the Unix note. Windows grants nothing on a file here.
+#[cfg(not(unix))]
+#[must_use]
+pub const fn runnable_by_others(_path: &std::path::Path) -> bool {
+    false
+}
+
 /// See the Unix note.
 ///
 /// Windows has no capability to grant on a file, so a helper there carries no

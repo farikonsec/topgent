@@ -78,6 +78,32 @@ jobs:
       - name: SARIF
         if: always()
         run: semgrep --config=p/rust --config=p/security-audit --config=p/secrets --sarif --output semgrep.sarif || true
+      # Semgrep marks a `nosemgrep` finding with SARIF `suppressions:
+      # [{"kind": "inSource"}]` and still emits it. Code scanning ingests those
+      # as open alerts, so every annotation that carries a written reason in
+      # the source shows up in the Security tab as an unresolved finding and
+      # stays there. Twenty-two of them did.
+      #
+      # This drops only the results semgrep itself marked suppressed. It is not
+      # the gate: `scan.sh --only semgrep` above runs with `--error` and fails
+      # the job on anything unsuppressed, so nothing is hidden by this step
+      # that would otherwise have failed the build. What it changes is that the
+      # tab lists what the gate would fail on, rather than a standing list of
+      # decisions already made and documented in the code.
+      - name: Drop findings already annotated in source
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import json
+          with open("semgrep.sarif", encoding="utf-8") as handle:
+              report = json.load(handle)
+          for run in report.get("runs", []):
+              before = len(run.get("results", []))
+              run["results"] = [r for r in run.get("results", []) if not r.get("suppressions")]
+              print(f"{before - len(run['results'])} suppressed, {len(run['results'])} reported")
+          with open("semgrep.sarif", "w", encoding="utf-8") as handle:
+              json.dump(report, handle)
+          PY
       - uses: github/codeql-action/upload-sarif@v4
         if: always()
         with:
