@@ -5,74 +5,170 @@
     {
       "id": "version-names-the-build",
       "description": "The binary can say which build it is, because a person holding an unmarked download has no other way to ask.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["--version"],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "--version"
+      ],
       "expect_exit": 0,
-      "expect_stdout": ["topgent "],
-      "must_not_appear": ["panicked", "RUST_BACKTRACE"]
+      "expect_stdout": [
+        "topgent "
+      ],
+      "must_not_appear": [
+        "panicked",
+        "RUST_BACKTRACE"
+      ]
     },
     {
       "id": "help-lists-the-commands",
       "description": "Every documented subcommand appears in the help text a user actually gets.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["--help"],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "--help"
+      ],
       "expect_exit": 0,
-      "expect_stdout": ["topgent doctor", "topgent evidence", "topgent replay", "--evidence-out"],
-      "must_not_appear": ["panicked", "unimplemented"]
+      "expect_stdout": [
+        "topgent doctor",
+        "topgent evidence",
+        "topgent replay",
+        "--evidence-out"
+      ],
+      "must_not_appear": [
+        "panicked",
+        "unimplemented"
+      ]
     },
     {
       "id": "doctor-reports-versions-and-the-contract",
-      "description": "doctor --json carries every schema version and the contract fingerprint, so a reader holding an artefact can ask whether this build reads it.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["doctor", "--json"],
-      "expect_exit": 0,
-      "expect_stdout": ["\"versions\"", "\"fact_schema\"", "\"evidence_schema\"", "\"contract_fingerprint\""],
-      "must_not_appear": ["panicked", "\"versions\":null"]
+      "description": "doctor --json carries every schema version and the contract fingerprint, so a reader holding an artefact can ask whether this build reads it. The exit code is deliberately not asserted: it reports whether the host has the sensors it needs, which is a fact about the machine and not about this command.",
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "doctor",
+        "--json"
+      ],
+      "expect_stdout": [
+        "\"versions\"",
+        "\"fact_schema\"",
+        "\"evidence_schema\"",
+        "\"contract_fingerprint\""
+      ],
+      "must_not_appear": [
+        "panicked",
+        "\"versions\":null"
+      ]
     },
     {
       "id": "policy-lint-explains-rather-than-labels",
       "description": "Every catalogue warning carries a code and a sentence about what it means for the results, because a code alone makes the reader guess.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["policy", "lint"],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "policy",
+        "lint"
+      ],
       "expect_exit": 1,
-      "expect_stdout": ["POLICY_", "factor"],
-      "must_not_appear": ["panicked", "POLICY_UNSATISFIABLE_CONDITION"]
+      "expect_stdout": [
+        "POLICY_",
+        "factor"
+      ],
+      "must_not_appear": [
+        "panicked",
+        "POLICY_UNSATISFIABLE_CONDITION"
+      ]
     },
     {
       "id": "policy-lint-json-is-machine-readable",
       "description": "The same warnings in a shape a pipeline can consume.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["policy", "lint", "--json"],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "policy",
+        "lint",
+        "--json"
+      ],
       "expect_exit": 1,
-      "expect_stdout": ["\"warnings\"", "\"factor_count\"", "\"sensors_checked\""],
-      "must_not_appear": ["panicked"]
+      "expect_stdout": [
+        "\"warnings\"",
+        "\"factor_count\"",
+        "\"sensors_checked\""
+      ],
+      "must_not_appear": [
+        "panicked"
+      ]
     },
     {
       "id": "evidence-requires-a-bundle",
       "description": "A missing --bundle is a usage error with exit 2, not a crash and not a silent success.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["evidence", "list"],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "evidence",
+        "list"
+      ],
       "expect_exit": 2,
       "expect_stdout": [],
-      "must_not_appear": ["panicked", "RUST_BACKTRACE"]
+      "must_not_appear": [
+        "panicked",
+        "RUST_BACKTRACE"
+      ]
     },
     {
       "id": "replay-refuses-a-file-that-is-not-a-bundle",
       "description": "Untrusted input is refused with exit 2 rather than parsed optimistically.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["replay", "scenarios/cli.json"],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "replay",
+        "scenarios/cli.json"
+      ],
       "expect_exit": 2,
       "expect_stdout": [],
-      "must_not_appear": ["panicked", "\"agents\""]
+      "must_not_appear": [
+        "panicked",
+        "\"agents\""
+      ]
     },
     {
       "id": "an-unknown-subcommand-does-not-scan",
       "description": "A mistyped subcommand must not fall through to a full sweep of the host.",
-      "platforms": ["macos", "linux", "windows"],
-      "args": ["evidence", "summon"],
+      "platforms": [
+        "macos",
+        "linux",
+        "windows"
+      ],
+      "args": [
+        "evidence",
+        "summon"
+      ],
       "expect_exit": 2,
       "expect_stdout": [],
-      "must_not_appear": ["panicked", "\"agents\""]
+      "must_not_appear": [
+        "panicked",
+        "\"agents\""
+      ]
     }
   ]
 }

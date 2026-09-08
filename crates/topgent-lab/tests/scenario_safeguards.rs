@@ -12,7 +12,7 @@ fn scenario(id: &str) -> Scenario {
         description: "a case".to_owned(),
         platforms: vec!["macos".to_owned()],
         args: vec!["--version".to_owned()],
-        expect_exit: 0,
+        expect_exit: Some(0),
         expect_stdout: vec!["topgent ".to_owned()],
         must_not_appear: vec!["panicked".to_owned()],
     }
@@ -145,4 +145,31 @@ fn a_case_that_holds_passes() {
     let outcome = judge(&scenario("good"), 0, "topgent 0.4.0", "");
     assert!(outcome.passed, "{:?}", outcome.failures);
     assert!(outcome.failures.is_empty());
+}
+
+/// A case with no stated exit code does not assert one.
+///
+/// Some commands report something about the *host* in their exit code rather
+/// than about themselves. `doctor` exits non-zero when the machine lacks a
+/// sensor it needs, which is true of plenty of good build machines, and a case
+/// about the content of its output has no business failing there. What such a
+/// case still asserts is everything else, which is checked below.
+#[test]
+fn a_case_without_an_expected_exit_still_checks_its_output() {
+    let mut open = scenario("any-exit");
+    open.expect_exit = None;
+    open.expect_stdout = vec!["\"versions\"".to_owned()];
+
+    let passed = judge(&open, 1, "{\"versions\":{}}", "");
+    assert!(
+        passed.passed,
+        "an unstated exit code was asserted anyway: {:?}",
+        passed.failures
+    );
+
+    let failed = judge(&open, 0, "{}", "");
+    assert!(
+        !failed.passed,
+        "a case with no expected exit stopped checking its output"
+    );
 }

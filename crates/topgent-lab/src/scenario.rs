@@ -51,8 +51,19 @@ pub struct Scenario {
     /// Arguments to the binary under test. The binary itself is not named here,
     /// because the point is to run whichever artefact is being validated.
     pub args: Vec<String>,
-    /// Exit code the command must return.
-    pub expect_exit: i32,
+    /// Exit code the command must return, where the command has a fixed one.
+    ///
+    /// Absent means the exit code is not part of what this case checks. That
+    /// is not laxity: some commands report something about the *host* in their
+    /// exit code rather than something about themselves. `doctor` exits
+    /// non-zero when the machine lacks a sensor it needs, which is true of
+    /// plenty of perfectly good build machines, and a case about the content
+    /// of its output has no business asserting that the host is healthy.
+    ///
+    /// Every case still has to assert something, which [`Suite::validate`]
+    /// enforces through `must_not_appear`.
+    #[serde(default)]
+    pub expect_exit: Option<i32>,
     /// Substrings that must all appear in standard output.
     #[serde(default)]
     pub expect_stdout: Vec<String>,
@@ -208,6 +219,28 @@ pub struct Outcome {
     pub failures: Vec<String>,
 }
 
+/// The first line of a stream, for a message that has to stay one line.
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or("")
+}
+
+/// Enough of a command's output to say why it failed, and no more.
+///
+/// Bounded, because a scenario's output can be a whole report and a test
+/// failure that scrolls off the screen is a test failure nobody reads.
+fn evidence(stdout: &str) -> String {
+    const MAX: usize = 600;
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return "(nothing)".to_owned();
+    }
+    let mut out: String = trimmed.chars().take(MAX).collect();
+    if trimmed.chars().count() > MAX {
+        out.push_str("...");
+    }
+    out.replace('\n', " ")
+}
+
 /// Compares one command's result against what the scenario expected.
 ///
 /// Pure, so the comparison can be tested without spawning anything. The
@@ -215,11 +248,20 @@ pub struct Outcome {
 #[must_use]
 pub fn judge(scenario: &Scenario, exit: i32, stdout: &str, stderr: &str) -> Outcome {
     let mut failures = Vec::new();
-    if exit != scenario.expect_exit {
+    if scenario
+        .expect_exit
+        .is_some_and(|expected| exit != expected)
+    {
+        // The output too, not only the code. A scenario that failed on a
+        // machine nobody can log into is worth nothing if all it says is a
+        // number: this one failed on a build runner for four rounds while the
+        // same command passed on every machine here, and each round cost a
+        // push to learn nothing. Whatever the command printed is the evidence.
         failures.push(format!(
-            "exit {exit}, expected {}; stderr: {}",
+            "exit {exit}, expected {:?}; stderr: {}; stdout: {}",
             scenario.expect_exit,
-            stderr.lines().next().unwrap_or("")
+            first_line(stderr),
+            evidence(stdout)
         ));
     }
     for wanted in &scenario.expect_stdout {
