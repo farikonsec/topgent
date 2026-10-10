@@ -298,7 +298,7 @@ Anything else, open an [issue](https://github.com/farikonsec/topgent/issues).
 
 ## Licence
 
-Apache-2.0. Copyright 2026 Hadosec. See [`LICENSE`](LICENSE) and
+Apache-2.0. Copyright 2026 Caspian Crescent & Hadosec. See [`LICENSE`](LICENSE) and
 [`NOTICE`](NOTICE).
 
 ---
