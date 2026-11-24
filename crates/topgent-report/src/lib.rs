@@ -46,7 +46,9 @@ pub(crate) mod legend;
 pub(crate) mod lineage;
 pub(crate) mod network;
 pub(crate) mod observed;
-pub(crate) mod ownership;
+// Public for the `ownership` fuzz target, which parses the same addresses.
+#[doc(hidden)]
+pub mod ownership;
 pub(crate) mod plain;
 pub(crate) mod response;
 pub(crate) mod rule_incidents;

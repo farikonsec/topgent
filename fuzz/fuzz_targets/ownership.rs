@@ -9,7 +9,7 @@ use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
     let Ok(text) = std::str::from_utf8(data) else { return };
-    let owner = topgent_ui::ownership::of(text);
+    let owner = topgent_report::ownership::of(text);
     // Whatever comes back must be printable without panicking, and an unknown
     // owner must say so rather than drawing an empty flag.
     let (country, network) = (owner.country(), owner.network());
@@ -22,6 +22,6 @@ fuzz_target!(|data: &[u8]| {
     // multi-line input exercises the parser rather than failing at the first
     // newline.
     for line in text.lines().take(16) {
-        let _ = topgent_ui::ownership::of(line);
+        let _ = topgent_report::ownership::of(line);
     }
 });

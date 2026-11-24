@@ -5,6 +5,7 @@ import { createServer, request } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 
 async function freePort() {
   const socket = createServer();
@@ -38,7 +39,7 @@ test("development server uses the configured binary and rejects foreign Host hea
   t.after(() => rm(directory, { recursive:true, force:true }));
 
   const port = await freePort();
-  const child = spawn(process.execPath, [new URL("serve.mjs", import.meta.url).pathname], {
+  const child = spawn(process.execPath, [fileURLToPath(new URL("serve.mjs", import.meta.url))], {
     env:{ ...process.env, PORT:String(port), TOPGENT_BIN:binary },
     stdio:["ignore", "pipe", "pipe"],
   });

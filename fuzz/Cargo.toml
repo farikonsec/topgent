@@ -23,6 +23,7 @@ topgent-ebpf-common = { path = "../crates/topgent-ebpf-common" }
 topgent-journal = { path = "../crates/topgent-journal" }
 topgent-facts = { path = "../crates/topgent-facts" }
 topgent-ui = { path = "../crates/topgent-ui" }
+topgent-report = { path = "../crates/topgent-report" }
 topgent-policy = { path = "../crates/topgent-policy" }
 topgent-export = { path = "../crates/topgent-export" }
 serde_json = "1"

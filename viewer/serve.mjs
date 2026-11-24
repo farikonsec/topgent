@@ -20,12 +20,13 @@ import { execFile, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { extname, join, normalize } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 
 const run = promisify(execFile);
 // The dev server serves exactly what the desktop app bundles, so a page that
 // works here is the page that ships. Fixtures and this server live one level
 // up and are never reachable from it.
-const UI = new URL("ui/", import.meta.url).pathname;
+const UI = fileURLToPath(new URL("ui/", import.meta.url));
 const REPO = join(UI, "..", "..");
 const PORT = Number(process.env.PORT ?? 4173);
 const TOKEN = randomBytes(16).toString("hex");

@@ -45,12 +45,12 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 #### CLI and tooling
 - `topgent --json --follow --every <ms>`: one report per line until stopped.
-- Fuzz targets for saved sessions, sensor lines and eBPF records.
+- Fuzz targets for saved sessions, sensor lines and eBPF records. CI now fuzzes all 20 targets; six existing ones (packet, proc_net, locals, firing, model_signature, handoff) were not in the CI matrix.
 - `scripts/model-providers.mjs`: lists OpenRouter models no provider prefix covers. Maintainer tool; Topgent makes no network requests.
 
 ### Changed
 - Linux release archives build `topgent-sensor` with the eBPF probe.
-- CI and release builds use Rust 1.98.0 instead of the moving `stable` channel.
+- CI and release builds use Rust 1.98.0 and Ubuntu 24.04 runners instead of moving `stable` and `ubuntu-latest`. Linux binaries keep the glibc baseline of 0.5.1.
 - One palette, font set and metric strip across the desktop app and web viewer.
 - Terse labels and messages across both front ends and incident text.
 - Each desktop window is its own session. History does not carry over between launches.

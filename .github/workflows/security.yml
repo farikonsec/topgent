@@ -26,7 +26,7 @@ permissions:
 jobs:
   secrets-trufflehog:
     name: Secrets (trufflehog)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -36,7 +36,7 @@ jobs:
 
   secrets-gitleaks:
     name: Secrets, including history (gitleaks)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
@@ -54,7 +54,7 @@ jobs:
 
   dependencies-osv:
     name: Dependencies (osv-scanner)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/install-scanners
@@ -70,7 +70,7 @@ jobs:
 
   sast-semgrep:
     name: Static analysis (semgrep)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/install-scanners
@@ -114,7 +114,7 @@ jobs:
   # Rust toolchain and the scanners do not.
   deny:
     name: Dependency licences and advisories (cargo-deny)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@master
