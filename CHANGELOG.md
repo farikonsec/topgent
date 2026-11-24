@@ -50,6 +50,7 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ### Changed
 - Linux release archives build `topgent-sensor` with the eBPF probe.
+- CI and release builds use Rust 1.98.0 instead of the moving `stable` channel.
 - One palette, font set and metric strip across the desktop app and web viewer.
 - Terse labels and messages across both front ends and incident text.
 - Each desktop window is its own session. History does not carry over between launches.

@@ -269,9 +269,8 @@ mod tests {
 
     #[test]
     fn fixed_workload_corpus_has_no_unexpected_temporal_findings() {
-        let corpus: Corpus =
-            serde_json::from_str(include_str!("testdata/s8-temporal-corpus.json"))
-                .expect("S8 temporal corpus must be valid JSON");
+        let corpus: Corpus = serde_json::from_str(include_str!("testdata/s8-temporal-corpus.json"))
+            .expect("S8 temporal corpus must be valid JSON");
         assert_eq!(corpus.schema_version, 1);
         assert_eq!(corpus.id, "s8-temporal-v1");
         assert_eq!(corpus.cases.len(), 10, "case removal changes the score");

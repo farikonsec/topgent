@@ -19,8 +19,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.0"
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2.9.2
       # Windows capture links against wpcap. The SDK is headers and import
@@ -100,8 +101,9 @@ jobs:
       FEATURES: topgent-sensor/ebpf,topgent-ebpf/probe
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: "1.98.0"
           components: clippy
       # The nightly the probe pins, and LLVM of the same major for bpf-linker.
       # Move them together (crates/topgent-ebpf-probe/rust-toolchain.toml).

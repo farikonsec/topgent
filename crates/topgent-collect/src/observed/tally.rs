@@ -1184,6 +1184,8 @@ mod tests {
         assert_eq!(d.burst_at, 26 * 60_000);
     }
 
+    // The tally is fed by the Linux sensor, and this test builds paths with `/`.
+    #[cfg(unix)]
     #[test]
     fn reads_keep_their_size_their_names_and_which_look_like_secrets() {
         // Test scratch space, named by pid; nothing security-relevant is written.

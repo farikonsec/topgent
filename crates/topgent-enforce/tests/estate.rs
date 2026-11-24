@@ -88,7 +88,10 @@ impl Estate {
         let dir = self.root.join(rel_dir);
         fs::create_dir_all(&dir).unwrap();
         let bin = dir.join(exe_name);
-        fs::copy("/bin/sleep", &bin).unwrap();
+        // A copy of this test binary, not of `sleep`: some hosts ship
+        // coreutils as one multi-call program that does nothing under another
+        // name. The copy runs the ignored `stand_in_holds` test below.
+        fs::copy(std::env::current_exe().unwrap(), &bin).unwrap();
         let _ = Command::new("codesign")
             .args(["-f", "-s", "-"])
             .arg(&bin)
@@ -129,9 +132,32 @@ fn sweep_estate(home: &Path, clock: &dyn Clock) -> Vec<topgent_facts::Fact> {
 /// than anything about Topgent, and it made whichever test lost the race look
 /// like a discovery failure. Retrying is the remedy; the window is microseconds
 /// and every other error is still fatal.
+/// Set in a stand-in's environment, so the holding test runs only there.
+const STAND_IN: &str = "TOPGENT_ESTATE_STAND_IN";
+
+/// The stand-in agent's whole job: stay alive until signalled. Ignored, so a
+/// normal run skips it; a stand-in runs it on purpose.
+#[test]
+#[ignore = "run only as a stand-in agent"]
+fn stand_in_holds() {
+    if std::env::var_os(STAND_IN).is_some() {
+        std::thread::sleep(std::time::Duration::from_secs(300));
+    }
+}
+
 fn spawn_freshly_written(bin: &Path) -> std::process::Child {
     for _ in 0..50 {
-        match Command::new(bin).arg("300").spawn() {
+        match Command::new(bin)
+            .args([
+                "stand_in_holds",
+                "--exact",
+                "--ignored",
+                "--test-threads=1",
+                "-q",
+            ])
+            .env(STAND_IN, "1")
+            .spawn()
+        {
             Ok(child) => return child,
             Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
                 std::thread::sleep(std::time::Duration::from_millis(20));
