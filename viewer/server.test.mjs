@@ -31,7 +31,8 @@ function requestWithHost(port, host) {
   });
 }
 
-test("development server uses the configured binary and rejects foreign Host headers", async t => {
+// The stand-in binary is a shell script, which Windows cannot execute.
+test("development server uses the configured binary and rejects foreign Host headers", { skip: process.platform === "win32" }, async t => {
   const directory = await mkdtemp(join(tmpdir(), "topgent-viewer-"));
   const binary = join(directory, "fake-topgent");
   await writeFile(binary, "#!/bin/sh\nprintf '{\"version\":\"isolated-test\",\"agents\":[]}\\n'\n");
