@@ -1,4 +1,5 @@
 // The application: wiring, the poll loop, and startup.
+// (inspector wired in wireControls)
 //
 // Everything that makes the page a running program rather than a set of
 // drawing functions. The panels know nothing about polling and the poll loop
@@ -12,17 +13,13 @@ import { app } from "./app-hooks.mjs";
 import { invoke, inDesktopApp } from "./transport.mjs";
 import {
   resetView,
-  PANEL_VIEWS,
   applyPanelLayout,
-  applyTheme,
   checkAlarms,
   renderViewNav,
   save,
   session,
-  setPanelOpen,
   toast,
-  view,
-} from "./state.mjs";
+  view, findAgent } from "./state.mjs";
 import { render } from "./render.mjs";
 import { renderAgents } from "./panels/agents.mjs";
 import { renderAssets } from "./panels/assets.mjs";
@@ -30,6 +27,7 @@ import { renderEvents } from "./panels/events.mjs";
 import { renderNetwork } from "./panels/network.mjs";
 import { askStop, wireResponse } from "./respond.mjs";
 import { wireOverlays } from "./overlays.mjs";
+import { applyMode, wireSimple } from "./simple.mjs";
 
 function downloadExport(contents, type, suffix) {
   const blob = new Blob([contents], { type });
@@ -45,10 +43,26 @@ function syncControls() {
   document.querySelectorAll(".fchip[data-risk]").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.risk === view.riskFilter)));
 }
 
+let pollTimer;
+function syncPauseControl() {
+  const paused = session.paused || view.refreshMs === 0;
+  $("pause").textContent = paused ? "Resume" : "Pause";
+  $("beat").classList.toggle("stale", paused);
+  $("host").textContent = paused ? "Paused" : "Live";
+}
+
+function applyWebPreferences() {
+  document.documentElement.dataset.density = view.density;
+  document.documentElement.dataset.theme = view.theme;
+  clearTimeout(pollTimer);
+  syncPauseControl();
+  if (view.refreshMs > 0) pollTimer = setTimeout(async () => { await poll(); applyWebPreferences(); }, view.refreshMs);
+}
+
 async function poll(force = false) {
   const selectOpen = document.activeElement?.matches?.("select");
   const overlayOpen = !$("legendScrim").hidden || !$("ciScrim").hidden;
-  if (!force && (session.paused || session.pending || selectOpen || overlayOpen)) return;
+  if (!force && (session.paused || view.refreshMs === 0 || session.pending || selectOpen || overlayOpen)) return;
   // A sweep already running is never joined by a second one. A slow host would
   // otherwise stack them until it ran out of memory.
   if (session.sweeping) return;
@@ -56,9 +70,11 @@ async function poll(force = false) {
   session.sweeping = true;
   try {
     session.data = await invoke("scan");
-    if (!session.data.agents.some(a => a.pid === session.selected)) session.selected = [...session.data.agents].sort((x,y)=>y.score-x.score)[0]?.pid ?? null;
+    // An ended agent stays selectable, as on the desktop: it is still in the session.
+    if (!findAgent(session.selected)) session.selected = [...session.data.agents].sort((x,y)=>y.score-x.score)[0]?.pid ?? null;
     if (session.expanded != null && !session.data.agents.some(a => a.pid === session.expanded)) session.expanded = null;
-    $("meta").textContent = `${session.data.agents.length} agents detected · ${session.data.fact_count} evidence points · topgent ${session.data.version}`;
+    $("meta").textContent = `${session.data.agents.length} agents detected · topgent ${session.data.version}`;
+    $("system").textContent = systemLine(session.data);
     $("beat").classList.remove("stale"); if (!session.paused) $("host").textContent = "Live";
     const alarmed = checkAlarms();
     render();
@@ -68,11 +84,12 @@ async function poll(force = false) {
 }
 
 /** Attach the header and panel controls. Called once at startup. */
+import { initInspector } from "./inspector.mjs";
+
 function wireControls() {
-  $("pause").onclick = () => { session.paused = !session.paused; $("pause").textContent = session.paused ? "Resume" : "Pause"; $("beat").classList.toggle("stale", session.paused); $("host").textContent = session.paused ? "Paused" : "Live"; if (!session.paused) poll(); };
-  $("reset").onclick = () => { resetView(); document.querySelectorAll(".resizable").forEach(n => n.style.height = ""); syncControls(); applyPanelLayout(); render(); };
-  $("openAllViews").onclick = () => { view.openPanels = PANEL_VIEWS.map(([id]) => id); save(); applyPanelLayout(); };
-  $("closeAllViews").onclick = () => { view.openPanels = []; save(); applyPanelLayout(); $("panel-agents").scrollIntoView({behavior:"smooth",block:"start"}); };
+  initInspector();
+  $("pause").onclick = () => { if (view.refreshMs === 0) { view.refreshMs=1500; save(); session.paused=false; } else session.paused = !session.paused; applyWebPreferences(); render(); if (!session.paused) poll(); };
+  $("reset").onclick = () => { resetView(); document.querySelectorAll(".resizable").forEach(n => n.style.height = ""); syncControls(); applyPanelLayout(); applyWebPreferences(); render(); };
   $("agentSearch").oninput = (e) => { view.agentQuery = e.target.value; save(); renderAgents(); };
   $("eventSearch").oninput = (e) => { view.eventQuery = e.target.value; save(); renderEvents(); };
   $("eventKind").onchange = (e) => { view.eventKind = e.target.value; save(); renderEvents(); };
@@ -100,7 +117,7 @@ function wireControls() {
   $("contextToggle").onclick = async () => { const enabled = !(session.data.context?.enabled); const result = await invoke("set_semantic_enabled", { enabled }); toast(result.message ?? (enabled ? "Optional context enabled" : "Optional context disabled")); await poll(); };
   $("contextClear").onclick = async () => { if (!confirm("Delete every locally retained semantic context record?")) return; const result = await invoke("clear_semantic_context", {}); toast(result.message ?? "Retained context deleted"); await poll(); };
   $("networkBaselineReset").onclick = async () => {
-    const agent = session.data.agents.find(item => item.pid === session.selected);
+    const agent = findAgent(session.selected);
     if (!agent) return;
     if (!confirm(`Reset the network baseline for ${agent.family ?? "this agent"} (pid ${agent.pid})?\n\nOnly history for this exact PID and start time will be removed. Current endpoints will become the first sample of a fresh collecting baseline.`)) return;
     const result = await invoke("reset_network_baseline", { pid:agent.pid, startedAt:agent.started_at });
@@ -121,13 +138,26 @@ app.poll = poll;
 app.askStop = askStop;
 
 wireOverlays();
+wireSimple();
+applyMode();
 wireResponse();
 wireControls();
+document.addEventListener("topgent-view-change", render);
+document.addEventListener("topgent-settings-change", applyWebPreferences);
+document.addEventListener("topgent-alert-toggle", () => $("soundBtn").click());
 
 syncControls();
 applyPanelLayout();
-applyTheme();
 $("soundBtn").textContent = session.alertsOn ? "🔔 On" : "🔕 Off";
 if (session.alertsOn && "Notification" in window && Notification.permission === "default") Notification.requestPermission();
 poll();
-setInterval(poll, 1500);
+applyWebPreferences();
+
+/** The host's system as the desktop's title bar names it (report.rs,
+ *  `system_line`): its own name, the architecture, the kernel. */
+export function systemLine(data) {
+  const platform = data.platform ?? {};
+  const kernel = data.deployment?.kernel;
+  return [platform.name || platform.os, platform.arch, kernel ? `kernel ${kernel}` : ""]
+    .filter(Boolean).join(" · ");
+}

@@ -13,11 +13,11 @@ export const KIND_LABEL = {
   started: "Started",
   stopped: "Stopped",
   grade_changed: "Risk changed",
-  credential_exposed: "Credential exposed",
+  credential_exposed: "Credential exposure",
   policy_breach: "Out of policy",
-  recon: "Scanning detected",
-  behaviour: "Rogue behaviour",
-  model_drift: "Model drift",
+  recon: "Network scanning",
+  behaviour: "Suspicious activity",
+  model_drift: "Model changed",
   action: "Action",
 };
 
@@ -25,8 +25,8 @@ export const KIND_LABEL = {
 // is how "CRITICAL to HIGH" was labelled an escalation and notified about.
 export function eventLabel(e) {
   if (e.kind !== "grade_changed") return KIND_LABEL[e.kind] ?? e.kind;
-  if (e.direction === "escalated") return "Risk escalated";
-  if (e.direction === "downgraded") return "Risk reduced";
+  if (e.direction === "escalated") return "Risk raised";
+  if (e.direction === "downgraded") return "Risk lowered";
   return KIND_LABEL.grade_changed;
 }
 

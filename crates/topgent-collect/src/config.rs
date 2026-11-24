@@ -325,7 +325,14 @@ impl Collector for ConfigCollector {
                 // Which model an agent uses is read from signatures, for every
                 // family, rather than from a match arm that only two of them
                 // ever appeared in.
-                model_facts(&subject, clock, family, &home, *pid, &mut facts);
+                model_facts(
+                    &subject,
+                    clock,
+                    family,
+                    &home,
+                    (*pid, *started_at),
+                    &mut facts,
+                );
                 match *family {
                     "claude-code" => claude_facts(&subject, clock, &home, &by_family, &mut facts),
                     "codex-cli" => codex_facts(&subject, clock, &home, &mut facts),
@@ -434,19 +441,38 @@ fn model_facts(
     clock: &dyn Clock,
     family: &str,
     home: &Path,
-    pid: u32,
+    (pid, started_at): (u32, UnixMillis),
     facts: &mut Vec<Fact>,
 ) {
     let Ok(signatures) = crate::model::builtin() else {
         return;
     };
-    let Some(found) = crate::model::detect(signatures, family, home, pid) else {
+    let cwd = working_directory(pid);
+    let session = crate::model::Session {
+        pid,
+        cwd: cwd.as_deref(),
+        started_at_ms: started_at.0,
+    };
+    let Some(found) = crate::model::detect(signatures, family, home, &session) else {
         return;
     };
     let confidence = match found.certainty {
         crate::model::Certainty::Observed => Confidence::Certain,
         crate::model::Certainty::Declared => Confidence::Likely,
     };
+    for model in &found.recent {
+        facts.extend(emit(
+            ID,
+            &found.probe,
+            confidence,
+            clock,
+            subject.clone(),
+            Claim::ModelSeen {
+                provider: crate::model::provider_of(signatures, model, ""),
+                model: model.clone(),
+            },
+        ));
+    }
     facts.extend(emit(
         ID,
         &found.probe,
@@ -458,4 +484,32 @@ fn model_facts(
             model: found.model,
         },
     ));
+}
+
+/// The directory a process is running in, which is what ties a Claude Code
+/// transcript to its session. `None` wherever the platform will not say.
+fn working_directory(pid: u32) -> Option<std::path::PathBuf> {
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_link(format!("/proc/{pid}/cwd")).ok()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let output = crate::tool::LSOF
+            .command()
+            .ok()?
+            .args(["-a", "-n", "-P", "-d", "cwd", "-Fn", "-p", &pid.to_string()])
+            .output()
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix('n'))
+            .filter(|path| path.starts_with('/'))
+            .map(std::path::PathBuf::from)
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    {
+        let _ = pid;
+        None
+    }
 }

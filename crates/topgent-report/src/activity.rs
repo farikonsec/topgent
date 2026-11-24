@@ -38,7 +38,7 @@ pub(crate) fn activity_json(activity: &topgent_core::Activity, agents: &[Agent])
             "network": event.network.as_ref().map(|network| json!({
                 "host": network.host,
                 "port": network.port,
-                "direction": match network.direction { topgent_facts::Direction::Outbound => "outbound", topgent_facts::Direction::Listening => "listening" },
+                "direction": network.direction.as_str(),
                 "phase": network.phase.as_str(),
                 "duration_ms": network.duration_ms,
             })),

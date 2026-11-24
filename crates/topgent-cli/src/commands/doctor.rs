@@ -6,6 +6,7 @@ pub(crate) fn doctor_command(args: &[String]) -> i32 {
     let platform = report.get("platform");
     let sensors = report.get("sensors").and_then(serde_json::Value::as_array);
     let coverage = report.get("coverage").and_then(serde_json::Value::as_array);
+    let deployment = report.get("deployment");
     if args.iter().any(|argument| argument == "--json") {
         println!(
             "{}",
@@ -13,6 +14,7 @@ pub(crate) fn doctor_command(args: &[String]) -> i32 {
                 "platform": platform,
                 "sensors": sensors,
                 "coverage": coverage,
+                "deployment": deployment,
                 // Every version that is part of the contract, in one place. A
                 // reader holding an artefact and asking "can this build read
                 // it" should not have to run four commands to find out.
@@ -30,6 +32,30 @@ pub(crate) fn doctor_command(args: &[String]) -> i32 {
             .and_then(serde_json::Value::as_str)
             .unwrap_or("unknown");
         println!("Topgent sensor health — {os}/{arch}\n");
+        if let Some(deployment) = deployment {
+            let mode = deployment
+                .get("mode")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            let kernel = deployment
+                .get("kernel")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("not reported");
+            let helpers = deployment
+                .get("helpers")
+                .and_then(serde_json::Value::as_array);
+            let ready = helpers.map_or(0, |rows| {
+                rows.iter()
+                    .filter(|row| {
+                        row.get("state").and_then(serde_json::Value::as_str) == Some("ready")
+                    })
+                    .count()
+            });
+            let total = helpers.map_or(0, Vec::len);
+            println!(
+                "  install              {mode}; kernel {kernel}; helpers {ready}/{total} ready\n"
+            );
+        }
         for sensor in sensors.into_iter().flatten() {
             println!(
                 "  {:<20} {:<20} {}",

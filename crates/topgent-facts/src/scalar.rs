@@ -138,6 +138,26 @@ pub enum Direction {
     Outbound,
     /// The process is listening.
     Listening,
+    /// A peer connected to the process, which accepted it.
+    ///
+    /// Appended rather than inserted. Every established socket used to be
+    /// called outbound, so a server holding twenty accepted connections looked
+    /// like an agent reaching twenty hosts, and each one fed the scanning and
+    /// unrestricted-network findings that are questions about where the agent
+    /// connected *to*.
+    Inbound,
+}
+
+impl Direction {
+    /// The word used in facts, reports, journals and the interface.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Outbound => "outbound",
+            Self::Listening => "listening",
+            Self::Inbound => "inbound",
+        }
+    }
 }
 
 /// Which protocol a socket carries.
@@ -188,6 +208,10 @@ impl Protocol {
             "tcp" | "tcp4" | "tcp6" => Self::Tcp,
             "udp" | "udp4" | "udp6" => Self::Udp,
             "icmp" | "icmpv6" | "icmp6" => Self::Icmp,
+            // Topgent's own word, which no platform prints. The journal writes
+            // `as_str` and reads it back through here, and without this arm a
+            // protocol nobody stated came back as one the platform named.
+            "unstated" => Self::Unstated,
             _ => Self::Other,
         }
     }

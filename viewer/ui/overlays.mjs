@@ -7,7 +7,7 @@
 import { $, el } from "./dom.mjs";
 import { invoke } from "./transport.mjs";
 import { app } from "./app-hooks.mjs";
-import { applyTheme, session, toast } from "./state.mjs";
+import { session, toast } from "./state.mjs";
 
 export function renderLegend() {
   const host = $("legendList"); host.textContent = "";
@@ -75,17 +75,12 @@ export function wireOverlays() {
   $("ciBtn").onclick = () => setOverlay("ciScrim", true, "ciClose");
   $("ciClose").onclick = () => setOverlay("ciScrim", false);
   $("ciScrim").onclick = (e) => { if (e.target === $("ciScrim")) setOverlay("ciScrim", false); };
-  $("themeBtn").onclick = () => {
-  session.theme = session.theme === "light" ? "dark" : "light";
-  localStorage.setItem("topgent.theme", session.theme);
-  applyTheme();
-};
   $("wAdd").onclick = async () => {
   const path = $("wPath").value.trim(); if (!path) return;
   await invoke("add_rule", { path, condition: $("wCond").value, severity: $("wSev").value });
   $("wPath").value = ""; await app.poll(); renderLegend();
 };
-  $("soundBtn").onclick = () => { session.alertsOn = !session.alertsOn; localStorage.setItem("topgent.sound", session.alertsOn ? "1" : "0"); $("soundBtn").textContent = session.alertsOn ? "🔔 On" : "🔕 Off"; if (session.alertsOn && "Notification" in window && Notification.permission === "default") Notification.requestPermission(); };
+  $("soundBtn").onclick = () => { session.alertsOn = !session.alertsOn; localStorage.setItem("topgent.sound", session.alertsOn ? "1" : "0"); $("soundBtn").textContent = session.alertsOn ? "🔔 On" : "🔕 Off"; if (session.alertsOn && "Notification" in window && Notification.permission === "default") Notification.requestPermission(); app.render(); };
 
 // ---- stop flow ----
 }

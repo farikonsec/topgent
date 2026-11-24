@@ -13,6 +13,8 @@ pub(crate) mod doctor;
 pub(crate) mod events;
 pub(crate) mod evidence;
 pub(crate) mod export;
+pub(crate) mod honeytoken;
+pub(crate) mod incidents;
 pub(crate) mod lab;
 pub(crate) mod network;
 pub(crate) mod policy;

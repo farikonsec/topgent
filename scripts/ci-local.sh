@@ -95,9 +95,8 @@ echo
 if [ ${#FAILED[@]} -eq 0 ]; then
   echo "  all clean"
   echo
-  echo "  Before a release, run the same on the lab machines. The steps are in"
-  echo "  docs/LAB-ACCESS.md; a Windows runner has no Npcap SDK unless the"
-  echo "  workflow puts one there, and that is worth confirming by hand."
+  echo "  Before a release, also run this on Linux and Windows. A Windows runner"
+  echo "  has no Npcap SDK unless the workflow installs one."
   exit 0
 fi
 

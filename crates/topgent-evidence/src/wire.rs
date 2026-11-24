@@ -35,6 +35,7 @@ impl Encode for Direction {
         into.text(match self {
             Self::Outbound => "outbound",
             Self::Listening => "listening",
+            Self::Inbound => "inbound",
         });
     }
 }
@@ -279,7 +280,7 @@ impl Encode for Claim {
                 into.text(family);
                 into.text(extension_id);
             }
-            Self::ModelInUse { provider, model } => {
+            Self::ModelInUse { provider, model } | Self::ModelSeen { provider, model } => {
                 into.text(provider);
                 into.text(model);
             }
@@ -326,7 +327,11 @@ impl Decode for Direction {
     fn decode(from: &mut Reader<'_>) -> Result<Self, DecodeError> {
         from.variant(
             "direction",
-            &[("outbound", Self::Outbound), ("listening", Self::Listening)],
+            &[
+                ("outbound", Self::Outbound),
+                ("listening", Self::Listening),
+                ("inbound", Self::Inbound),
+            ],
         )
     }
 }
@@ -534,6 +539,10 @@ impl Decode for Claim {
                 extension_id: from.string()?,
             }),
             "model_in_use" => Ok(Self::ModelInUse {
+                provider: from.string()?,
+                model: from.string()?,
+            }),
+            "model_seen" => Ok(Self::ModelSeen {
                 provider: from.string()?,
                 model: from.string()?,
             }),

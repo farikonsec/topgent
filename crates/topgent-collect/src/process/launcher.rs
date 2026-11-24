@@ -29,10 +29,39 @@ pub fn is_script_runtime(exe: &str) -> bool {
     SCRIPT_RUNTIMES.contains(&basename)
 }
 
+/// The module a Python interpreter was told to run with `-m`.
+///
+/// `python -m unsloth` names its program in the second argument, not the
+/// first, so the first-argument rule above sees only `-m`. The second argument
+/// is read only when the program is Python and the first is exactly `-m`, and
+/// only a dotted module name is accepted: anything else is not a module name
+/// and is dropped unread by the caller.
+#[cfg(any(target_os = "linux", test))]
+#[must_use]
+pub fn python_module(fields: &[String]) -> Option<String> {
+    let program = fields.first()?.to_ascii_lowercase().replace('\\', "/");
+    let basename = program.rsplit('/').next().unwrap_or(&program);
+    if !basename.starts_with("python") || fields.get(1).map(String::as_str) != Some("-m") {
+        return None;
+    }
+    let module = fields.get(2)?;
+    let valid = !module.is_empty()
+        && module.len() <= 64
+        && module
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.');
+    valid.then(|| module.clone())
+}
+
 #[cfg(target_os = "linux")]
 pub(super) fn launcher_path(pid: u32) -> Option<String> {
     let file = std::fs::File::open(format!("/proc/{pid}/cmdline")).ok()?;
     let fields = first_nul_fields(file, 2);
+    if fields.get(1).map(String::as_str) == Some("-m") {
+        // Only now is a third field read, and only to check it is a module.
+        let file = std::fs::File::open(format!("/proc/{pid}/cmdline")).ok()?;
+        return python_module(&first_nul_fields(file, 3));
+    }
     let launcher = fields.get(1)?;
     let path = std::path::Path::new(launcher);
     std::fs::canonicalize(path)
@@ -214,6 +243,39 @@ fn first_nul_fields(mut reader: impl Read, limit: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn python_dash_m_names_the_module_and_nothing_else() {
+        let fields = |args: &[&str]| args.iter().map(|a| (*a).to_owned()).collect::<Vec<_>>();
+        assert_eq!(
+            super::python_module(&fields(&["/venv/bin/python3", "-m", "unsloth"])),
+            Some("unsloth".to_owned())
+        );
+        assert_eq!(
+            super::python_module(&fields(&["python3.11", "-m", "unsloth.cli"])),
+            Some("unsloth.cli".to_owned())
+        );
+        assert_eq!(
+            super::python_module(&fields(&["node", "-m", "unsloth"])),
+            None,
+            "only Python runs -m"
+        );
+        assert_eq!(
+            super::python_module(&fields(&["python3", "train.py", "-m"])),
+            None
+        );
+        assert_eq!(
+            super::python_module(&fields(&["python3", "-m", "x; rm -rf /"])),
+            None,
+            "not a module name"
+        );
+        assert_eq!(super::python_module(&fields(&["python3", "-m"])), None);
+        assert_eq!(
+            super::super::table::family_of("unsloth.cli"),
+            Some("unsloth"),
+            "a module run with -m is recognised by the catalogue"
+        );
+    }
 
     #[test]
     fn an_npm_agent_is_identified_by_the_script_it_runs_not_by_node() {

@@ -42,6 +42,7 @@ fn run(collector: &'static str, state: CapabilityState, dropped: Option<u64>) ->
         detail: None,
         dropped_events: dropped,
         boundary: None,
+        continuous: None,
     }
 }
 
@@ -255,12 +256,13 @@ fn a_collector_that_reported_loss_can_never_claim_completeness() {
 }
 
 #[test]
-fn only_a_collector_that_measured_zero_drops_may_say_complete() {
-    let measured = run("network_event", CapabilityState::Available, Some(0));
-    assert_eq!(
-        coverage_for(&measured),
-        CollectionCoverage::CompleteForWindow
-    );
+fn zero_partial_drops_do_not_establish_complete_collection() {
+    // Capture counts accumulator overflow, not kernel drops or sensor gaps.
+    // A zero must not sign evidence claiming completeness for the interval.
+    for collector in ["capture", "network_events", "future_sensor"] {
+        let measured = run(collector, CapabilityState::Available, Some(0));
+        assert_eq!(coverage_for(&measured), CollectionCoverage::SnapshotOnly);
+    }
 
     // A collector that does not account for drops has said nothing about the
     // interval between two sweeps, so it gets the weaker word.

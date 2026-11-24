@@ -16,7 +16,7 @@ fn catalogue_is_machine_readable_and_separates_verified_from_catalogued() {
     let value: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(value["schema_version"], 1);
     let families = value["families"].as_array().expect("families array");
-    assert_eq!(families.len(), 19);
+    assert_eq!(families.len(), 27);
     // An extension-only family is still a family: it has no executable to
     // match, and its identity is the exact extension id.
     assert!(families.iter().any(|family| {
@@ -31,6 +31,13 @@ fn catalogue_is_machine_readable_and_separates_verified_from_catalogued() {
             && family["verified_platforms"]
                 .as_array()
                 .is_some_and(|platforms| platforms.iter().any(|item| item == "linux-aarch64"))
+    }));
+    assert!(families.iter().any(|family| {
+        family["id"] == "crush"
+            && family["provenance_required"] == true
+            && family["verified_platforms"]
+                .as_array()
+                .is_some_and(Vec::is_empty)
     }));
 }
 

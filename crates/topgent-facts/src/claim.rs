@@ -223,6 +223,18 @@ pub enum Claim {
         /// Model identifier as reported.
         model: String,
     },
+    /// The subject used this model recently, besides the one it uses now.
+    ///
+    /// An agent's log can name several models in a few minutes: the chat
+    /// model, a small one that writes titles, and the one used before a switch.
+    /// `ModelInUse` names the newest; this names the others, so a person sees
+    /// every model the agent talked to rather than only the last.
+    ModelSeen {
+        /// Provider, such as `openai`.
+        provider: String,
+        /// Model identifier as reported.
+        model: String,
+    },
     /// The subject declares a connector it may call.
     ConnectorDeclared {
         /// Connector name.
@@ -281,6 +293,7 @@ impl Claim {
             Self::AgentFamily { .. } => "agent_family",
             Self::EditorExtensionActive { .. } => "editor_extension_active",
             Self::ModelInUse { .. } => "model_in_use",
+            Self::ModelSeen { .. } => "model_seen",
             Self::ConnectorDeclared { .. } => "connector_declared",
             Self::InvokesAgent { .. } => "invokes_agent",
             Self::SubjectNotEvaluated { .. } => "subject_not_evaluated",

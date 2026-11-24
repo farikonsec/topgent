@@ -73,6 +73,13 @@ pub enum SourceKind {
     Jsonl,
     /// `key = value` or `key: value` as plain text, no parser pulled in.
     Keyvalue,
+    /// A token in a file no parser here understands, such as a SQLite
+    /// write-ahead log: the last occurrence of `key` followed by a
+    /// `name/Model` token, read from the file's tail, and the model is the part
+    /// after the last `/`. `ZCode` records each task's model only in its task
+    /// index, as `account:<plan>/<model>`, and pulling in a SQLite engine to read
+    /// one string is the wider supply chain this crate refuses.
+    Marker,
     /// One named flag on the running process's command line.
     ///
     /// The only source that reads a command line, and it reads exactly one
@@ -80,6 +87,17 @@ pub enum SourceKind {
     /// [`flag_value`] for why that shape is the mitigation rather than a
     /// convenience.
     Argv,
+}
+
+/// Which run of an agent a transcript belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionBinding {
+    /// Claude Code's layout: one directory per working directory, named by
+    /// [`project_slug`], holding one transcript per session. The first `*`
+    /// segment of the path is that directory, and only a transcript written
+    /// since the process started can be its session.
+    ClaudeProject,
 }
 
 /// One place a family's model may be stated.
@@ -107,6 +125,11 @@ pub struct Source {
     /// Why this source is here and where it sits in precedence.
     #[serde(default)]
     pub note: Option<String>,
+    /// How a file is tied to the running process, when many runs share a
+    /// directory. Without it, the first file that names a model answers for
+    /// every process of the family.
+    #[serde(default)]
+    pub session: Option<SessionBinding>,
 }
 
 /// One family's ordered sources.
@@ -173,6 +196,9 @@ pub struct Detected {
     pub certainty: Certainty,
     /// The file it came from, for the evidence trail.
     pub probe: String,
+    /// Other models the same source named recently, newest first, without
+    /// `model`. Only a log names more than one; a config names one.
+    pub recent: Vec<String>,
 }
 
 /// The signatures compiled into this build.
@@ -231,14 +257,18 @@ pub fn validate(s: &Signatures) -> Result<(), String> {
                             family.family
                         ));
                     }
-                    if !source.path.is_empty() || !source.key.is_empty() {
+                    if !source.path.is_empty() || !source.key.is_empty() || source.session.is_some()
+                    {
                         return Err(format!(
                             "{}: an argv source reads no file, so it must name no path or key",
                             family.family
                         ));
                     }
                 }
-                SourceKind::Json | SourceKind::Jsonl | SourceKind::Keyvalue => {
+                SourceKind::Json
+                | SourceKind::Jsonl
+                | SourceKind::Keyvalue
+                | SourceKind::Marker => {
                     if source.key.trim().is_empty() {
                         return Err(format!("{}: a source names no key", family.family));
                     }
@@ -249,6 +279,15 @@ pub fn validate(s: &Signatures) -> Result<(), String> {
                         ));
                     }
                     check_path(&family.family, &source.path)?;
+                    if source.session.is_some()
+                        && (source.kind != SourceKind::Jsonl
+                            || !source.path.split('/').any(|segment| segment == "*"))
+                    {
+                        return Err(format!(
+                            "{}: a session binding needs a transcript path with a `*` directory",
+                            family.family
+                        ));
+                    }
                 }
             }
         }
@@ -318,13 +357,111 @@ pub fn admissible(s: &Signatures, value: &str) -> bool {
             .all(|c| !c.is_control() && c != '\n' && c != '\r')
 }
 
+/// Most bytes read from the start of a configuration file.
+pub const HEAD_BYTES: u64 = 64 * 1024;
+/// Most bytes read from the end of a transcript.
+pub const TAIL_BYTES: u64 = 256 * 1024;
+
+/// The process whose model is being looked up.
+#[derive(Debug, Clone, Copy)]
+pub struct Session<'a> {
+    /// Process id.
+    pub pid: u32,
+    /// Its working directory, where the platform states one.
+    pub cwd: Option<&'a Path>,
+    /// When it started, in Unix milliseconds.
+    pub started_at_ms: u64,
+}
+
+/// The directory name Claude Code keeps a working directory's transcripts in:
+/// the path with every character that is not a letter or digit replaced by `-`.
+#[must_use]
+pub fn project_slug(cwd: &Path) -> String {
+    cwd.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
+}
+
+/// Reads a source file, bounded before anything is allocated.
+///
+/// A configuration names its model near the top, so its first
+/// [`HEAD_BYTES`] are read. A transcript is append-only and the current model
+/// is at the end, so its last [`TAIL_BYTES`] are read and the partial record
+/// the cut lands in is dropped. Either way the rest of the file, which for a
+/// transcript is the conversation itself, is never read at all.
+#[must_use]
+pub fn read_bounded(path: &Path, kind: SourceKind) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    if matches!(kind, SourceKind::Jsonl | SourceKind::Marker) {
+        let length = file.metadata().ok()?.len();
+        let start = length.saturating_sub(TAIL_BYTES);
+        file.seek(SeekFrom::Start(start)).ok()?;
+        file.take(TAIL_BYTES).read_to_end(&mut bytes).ok()?;
+        if start > 0 && kind == SourceKind::Jsonl {
+            let cut = bytes.iter().position(|byte| *byte == b'\n')?;
+            bytes.drain(..=cut);
+        }
+    } else {
+        file.take(HEAD_BYTES).read_to_end(&mut bytes).ok()?;
+    }
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The files a source names for this session, newest first.
+fn candidates(home: &Path, source: &Source, session: &Session<'_>) -> Vec<PathBuf> {
+    match source.session {
+        None => expand(home, &source.path),
+        Some(SessionBinding::ClaudeProject) => {
+            let Some(cwd) = session.cwd else {
+                // A transcript cannot be tied to a process whose directory is
+                // unknown, and an untied one is some other session's answer.
+                return Vec::new();
+            };
+            let slug = project_slug(cwd);
+            let mut bound = false;
+            let pattern = source
+                .path
+                .split('/')
+                .map(|segment| {
+                    if segment == "*" && !bound {
+                        bound = true;
+                        slug.as_str()
+                    } else {
+                        segment
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("/");
+            expand(home, &pattern)
+                .into_iter()
+                .filter(|path| modified_ms(path).is_some_and(|at| at >= session.started_at_ms))
+                .collect()
+        }
+    }
+}
+
+fn modified_ms(path: &Path) -> Option<u64> {
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let since = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    u64::try_from(since.as_millis()).ok()
+}
+
 /// Looks a family's model up, in precedence order.
 ///
 /// Returns the first source that yields something admissible. `None` means no
 /// source named one, which is a different answer from an empty model and is
 /// reported as such.
 #[must_use]
-pub fn detect(s: &Signatures, family: &str, home: &Path, pid: u32) -> Option<Detected> {
+pub fn detect(
+    s: &Signatures,
+    family: &str,
+    home: &Path,
+    session: &Session<'_>,
+) -> Option<Detected> {
+    let pid = session.pid;
     let entry = s.families.iter().find(|f| f.family == family)?;
     for source in &entry.sources {
         if source.kind == SourceKind::Argv {
@@ -346,10 +483,11 @@ pub fn detect(s: &Signatures, family: &str, home: &Path, pid: u32) -> Option<Det
                 // an evidence trail would put back exactly what `flag_value`
                 // exists to keep out.
                 probe: format!("command line flag {flag}"),
+                recent: Vec::new(),
             });
         }
-        for path in expand(home, &source.path) {
-            let Ok(text) = std::fs::read_to_string(&path) else {
+        for path in candidates(home, source, session) {
+            let Some(text) = read_bounded(&path, source.kind) else {
                 continue;
             };
             let Some(value) = extract(source.kind, &text, &source.key) else {
@@ -359,11 +497,20 @@ pub fn detect(s: &Signatures, family: &str, home: &Path, pid: u32) -> Option<Det
                 continue;
             }
             let model = value.trim().to_owned();
+            let recent = if source.kind == SourceKind::Marker {
+                markers(&text, &source.key, RECENT_MODELS)
+                    .into_iter()
+                    .filter(|other| other != &model && admissible(s, other))
+                    .collect()
+            } else {
+                Vec::new()
+            };
             return Some(Detected {
                 provider: provider_of(s, &model, &entry.default_provider),
                 model,
                 certainty: source.certainty,
                 probe: path.display().to_string(),
+                recent,
             });
         }
     }
@@ -374,7 +521,8 @@ pub fn detect(s: &Signatures, family: &str, home: &Path, pid: u32) -> Option<Det
 ///
 /// Never recursive and never crossing more than the segments the pattern
 /// names, so a signature cannot turn into a filesystem walk. Results are
-/// sorted, so two runs read the same files in the same order.
+/// newest first, then by name, because the newest file is the current answer
+/// and a bounded list must not keep the oldest.
 fn expand(home: &Path, pattern: &str) -> Vec<PathBuf> {
     let mut current = vec![home.to_path_buf()];
     for segment in pattern.split('/') {
@@ -394,7 +542,7 @@ fn expand(home: &Path, pattern: &str) -> Vec<PathBuf> {
                     })
                     .map(|entry| entry.path())
                     .collect();
-                hits.sort();
+                hits.sort_by_key(|path| (std::cmp::Reverse(modified_ms(path)), path.clone()));
                 // A directory holding thousands of transcripts must not turn
                 // one sweep into a filesystem crawl.
                 hits.truncate(32);
@@ -459,7 +607,56 @@ pub fn extract(kind: SourceKind, text: &str, key: &str) -> Option<String> {
             .filter_map(|line| line.split_once('=').or_else(|| line.split_once(':')))
             .find(|(k, _)| k.trim() == key)
             .map(|(_, v)| v.trim().trim_matches('"').trim_matches('\'').to_owned()),
+        SourceKind::Marker => marker(text, key),
     }
+}
+
+/// The model in the last `key<name>/<model>` token in `text`.
+///
+/// Only the characters a plan or model name uses are taken, so binary around
+/// the token, or a token cut by the read bound, yields nothing rather than a
+/// half name. The newest record is at the end of a write-ahead log.
+/// Most models a log is asked for besides the newest.
+const RECENT_MODELS: usize = 8;
+
+/// Every distinct model a marker source names, newest first, at most `limit`.
+#[must_use]
+pub fn markers(text: &str, key: &str, limit: usize) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
+    let mut rest = text;
+    while found.len() < limit {
+        let Some(model) = marker(rest, key) else {
+            break;
+        };
+        let Some(at) = rest
+            .rfind(&format!("{key}{model}"))
+            .or_else(|| rest.rfind(key))
+        else {
+            break;
+        };
+        if !found.contains(&model) {
+            found.push(model);
+        }
+        rest = rest.get(..at).unwrap_or("");
+    }
+    found
+}
+
+fn marker(text: &str, key: &str) -> Option<String> {
+    let allowed = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | '/');
+    // A key ending in `=` is a `key=value` log field, and the value is the
+    // model as written: Codex logs each turn as `model=gpt-6-astra`.
+    let bare = key.ends_with('=');
+    text.rmatch_indices(key).find_map(|(at, _)| {
+        let rest = text.get(at + key.len()..)?;
+        let token: String = rest.chars().take_while(|c| allowed(*c)).collect();
+        let model = if bare {
+            token.as_str()
+        } else {
+            token.rsplit_once('/')?.1
+        };
+        (!model.is_empty() && model.chars().any(|c| c.is_ascii_digit())).then(|| model.to_owned())
+    })
 }
 
 /// Finds a key at the top level or one nesting down.

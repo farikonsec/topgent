@@ -28,10 +28,8 @@ impl EnforcementCapability {
     /// response that cannot run would let the ladder promise an action it would
     /// then fail to deliver, which is worse than not offering it.
     ///
-    /// Interception is measured the same way. It was a hardcoded `false`, which
-    /// made `Block` and `Approval` refuse identically on every host and read as
-    /// "this product does not do that", when on a Linux host with a privileged
-    /// helper the truth is that it does.
+    /// OS privileges alone do not establish interception. The probe must also
+    /// establish a working backend; this build does not ship one.
     #[must_use]
     pub fn local() -> Self {
         Self {

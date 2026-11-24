@@ -19,6 +19,8 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 topgent-collect = { path = "../crates/topgent-collect" }
+topgent-ebpf-common = { path = "../crates/topgent-ebpf-common" }
+topgent-journal = { path = "../crates/topgent-journal" }
 topgent-facts = { path = "../crates/topgent-facts" }
 topgent-ui = { path = "../crates/topgent-ui" }
 topgent-policy = { path = "../crates/topgent-policy" }
@@ -124,5 +126,23 @@ doc = false
 [[bin]]
 name = "packet"
 path = "fuzz_targets/packet.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "sensor_line"
+path = "fuzz_targets/sensor_line.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "ebpf_records"
+path = "fuzz_targets/ebpf_records.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "session_file"
+path = "fuzz_targets/session_file.rs"
 test = false
 doc = false

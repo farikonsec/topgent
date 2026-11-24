@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "note": "Decoy secrets `topgent honeytoken plant <dir>` writes, and the card a read of one raises. Each decoy's path is relative to the folder it is planted in and must match the sensitive-file catalogue as its `class`, so the collector records the read by name without opening anything. Placeholders in `content` are filled with fresh random values at planting: {{key_id}} an AWS-shaped access key id, {{secret}} 40 base64 characters, {{token}} a `tgh_`-prefixed token, {{blob}} a long base64 block. The values are never stored: the manifest keeps paths, classes, sizes and times.",
+  "decoys": [
+    {
+      "path": ".env",
+      "class": "app_secret",
+      "content": "# production\nDATABASE_URL=postgres://deploy:{{secret}}@db.internal:5432/app\nAWS_ACCESS_KEY_ID={{key_id}}\nAWS_SECRET_ACCESS_KEY={{secret}}\nSTRIPE_SECRET_KEY=sk_live_{{token}}\n"
+    },
+    {
+      "path": ".aws/credentials",
+      "class": "cloud_credential",
+      "content": "[default]\naws_access_key_id = {{key_id}}\naws_secret_access_key = {{secret}}\n\n[deploy]\naws_access_key_id = {{key_id}}\naws_secret_access_key = {{secret}}\n"
+    },
+    {
+      "path": "id_rsa_deploy",
+      "class": "private_key",
+      "content": "{{pem_begin}}\n{{blob}}\n{{pem_end}}\n"
+    },
+    {
+      "path": "Passwords.kdbx",
+      "class": "password_manager",
+      "content": "{{blob}}"
+    },
+    {
+      "path": "backup.sqldump",
+      "class": "database_dump",
+      "content": "-- dump of users\nINSERT INTO users (email, api_token) VALUES ('ops@example.com', '{{token}}');\n"
+    }
+  ],
+  "card": {
+    "kind": "honeytoken_accessed",
+    "name": "Honeytoken Accessed",
+    "severity": "critical",
+    "why": [
+      "Decoy secret planted with `topgent honeytoken plant`. No task needs it; any read is a finding.",
+      "Opening a decoy credential indicates a search for credentials."
+    ],
+    "actions": [
+      "Stop the program and check what else it read and where it connected.",
+      "Treat any real secret in the same places as disclosed: rotate the keys and tokens it could reach."
+    ],
+    "limits": [
+      "Any program that opens the file raises this, including grep, indexers and backup tools. The card names the program.",
+      "The read is recorded by file name. Contents are not read.",
+      "The planted-path list is in the user's state folder. An agent running as the user can edit it and remove an alarm."
+    ]
+  }
+}

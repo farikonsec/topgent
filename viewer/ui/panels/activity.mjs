@@ -5,12 +5,13 @@
 // proximity never reads as causality.
 
 import { $, clock, el, rel } from "../dom.mjs";
-import { session, view } from "../state.mjs";
+import { session, view, findAgent } from "../state.mjs";
 import { changeSort, makeTable, sortedBy } from "../table.mjs";
+import { openInspector } from "../inspector.mjs";
 
 export function renderActivity() {
   const host = $("activity");
-  const agent = session.data.agents.find(item => item.pid === session.selected);
+  const agent = findAgent(session.selected);
   const allEvents = session.data.activity?.events ?? [];
   const events = sortedBy(
     allEvents.filter(event => !agent || (event.agent_pid === agent.pid && event.agent_started_at === agent.started_at)),
@@ -38,13 +39,25 @@ export function renderActivity() {
   }
   const rows = events.map(event => {
     const link = linkByTarget.get(event.id);
-    return el("tr", {}, [
-    el("td", { className:"mono", title:new Date(event.at).toString() }, [el("div", { textContent:clock(event.at) }), el("div", { className:"faint", textContent:rel(event.at)+" ago" })]),
-    el("td", {}, [el("div", { textContent:event.title, style:"font-weight:500" }), el("div", { className:"mono faint", textContent:event.detail })]),
-    el("td", { className:"mono muted", textContent:String(event.actor_pid) }),
-    el("td", {}, link ? [el("div", { textContent:link.relation }), el("div", { className:"certainty", textContent:link.certainty })] : el("span", { className:"faint", textContent:"root" })),
-    el("td", {}, [el("div", { textContent:event.confidence }), el("div", { className:"mono faint", textContent:`${event.collector} · ${event.probe}` })]),
-  ]);
+    const tr = el("tr", { className:"clickable" }, [
+      el("td", { className:"mono", title:new Date(event.at).toString() }, [el("div", { textContent:clock(event.at) }), el("div", { className:"faint", textContent:rel(event.at)+" ago" })]),
+      el("td", {}, [el("div", { textContent:event.title, style:"font-weight:500" }), el("div", { className:"mono faint", textContent:event.detail })]),
+      el("td", { className:"mono muted", textContent:String(event.actor_pid) }),
+      el("td", {}, link ? [el("div", { textContent:link.relation }), el("div", { className:"certainty", textContent:link.certainty })] : el("span", { className:"faint", textContent:"root" })),
+      el("td", {}, [el("div", { textContent:event.confidence }), el("div", { className:"mono faint", textContent:`${event.collector} · ${event.probe}` })]),
+    ]);
+    tr.onclick = () => openInspector({
+      title: event.title,
+      plain: event.detail,
+      rows: [
+        ["when", clock(event.at)],
+        ["actor pid", String(event.actor_pid)],
+        ["relationship", link ? `${link.relation} (${link.certainty})` : "root"],
+        ["evidence", event.confidence],
+        ["seen by", `${event.collector} · ${event.probe}`],
+      ],
+    });
+    return tr;
   });
   out.append(makeTable("activity", [
     {key:"at",label:"When",sortable:true}, {key:"title",label:"Observed activity",sortable:true},

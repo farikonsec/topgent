@@ -4,6 +4,8 @@
 //! an elevated helper. A successful syscall and path must share one audit ID,
 //! and the PID must still resolve to a live process identity.
 
+#[cfg(any(target_os = "linux", test))]
+use crate::audit::record::{audit_id, audit_time_ms, field, quoted_field};
 #[cfg(target_os = "linux")]
 use crate::emit;
 use crate::{Clock, CollectError, Collector};
@@ -63,11 +65,9 @@ impl Collector for FilesystemEventCollector {
     /// are attributed correctly.
     fn boundary(&self) -> Option<&'static str> {
         Some(
-            "File access is attributed only to the process the kernel recorded making the \
-             syscall, so a read performed by an agent's short-lived child is not attributed to \
-             the agent and is not seen at all once that child exits. The kernel's dropped-event \
-             counter needs privilege Topgent does not take, so no loss accounting is reported \
-             and completeness is never claimed.",
+            "Audit actions are joined to retained process history at event time, including exited children. \
+             Read/write describe successful opens or related syscalls, not transferred bytes. Only configured Audit rules and a bounded log tail are read; \
+             upstream loss is unmeasured and completeness is not claimed.",
         )
     }
 
@@ -108,12 +108,15 @@ impl Collector for FilesystemEventCollector {
         #[cfg(target_os = "linux")]
         {
             let text = read_bounded_tail(&self.audit_log)?;
+            let events = parse_audit_events(&text);
+            hand_over(&events, &text, clock.now().0);
+            crate::observed::publish_syscalls(&text, clock.now().0);
             let processes = crate::process::snapshot()
                 .into_iter()
                 .map(|process| (process.pid, (process.started_at.0, process.subject())))
                 .collect::<BTreeMap<_, _>>();
             let now = clock.now().0;
-            Ok(parse_audit_events(&text)
+            Ok(events
                 .into_iter()
                 .filter_map(|event| {
                     let (started_at, subject) = processes.get(&event.pid)?;
@@ -135,6 +138,60 @@ impl Collector for FilesystemEventCollector {
                 .collect())
         }
     }
+}
+
+/// Every record, attributable or not, for the report to resolve against
+/// process history: this sweep's lookup only finds processes still running.
+#[cfg(target_os = "linux")]
+fn hand_over(events: &[AuditEvent], text: &str, now: u64) {
+    use crate::observed::{ActionKind, ObservedAction, Stream, lineage_offset, publish};
+    let offset = lineage_offset();
+    let programs = crate::audit::exec::programs(text);
+    publish(
+        Stream::File,
+        events
+            .iter()
+            .map(|event| {
+                ObservedAction::new(
+                    &event.record,
+                    event.pid,
+                    event.observed_at,
+                    offset,
+                    ActionKind::File {
+                        path: event.path.clone(),
+                        access: event.access,
+                    },
+                )
+            })
+            .map(|mut action| {
+                action.program = programs.get(&action.record).cloned();
+                action
+            })
+            .collect(),
+        now,
+    );
+    publish(
+        Stream::Exec,
+        crate::audit::exec::parse(text)
+            .into_iter()
+            .map(|exec| {
+                ObservedAction::new(
+                    &exec.record,
+                    exec.pid,
+                    exec.at,
+                    offset,
+                    ActionKind::Exec {
+                        program: exec.program,
+                    },
+                )
+            })
+            .map(|mut action| {
+                action.program = programs.get(&action.record).cloned();
+                action
+            })
+            .collect(),
+        now,
+    );
 }
 
 #[cfg(windows)]
@@ -164,6 +221,8 @@ fn event_matches_process(event: &AuditEvent, started_at: u64, now: u64) -> bool 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg(any(target_os = "linux", windows, test))]
 struct AuditEvent {
+    /// The record id, `seconds.millis:serial`; empty where the source has none.
+    record: String,
     pid: u32,
     observed_at: u64,
     path: String,
@@ -196,6 +255,7 @@ fn parse_windows_security_events(text: &str) -> Vec<AuditEvent> {
             let pid = parse_windows_number(&record.pid).and_then(|value| value.try_into().ok())?;
             let mask = parse_windows_number(&record.access_mask)?;
             Some(AuditEvent {
+                record: String::new(),
                 pid,
                 observed_at: record.observed_at,
                 path: record.path,
@@ -295,7 +355,51 @@ struct PartialEvent {
     observed_at: Option<u64>,
     access: Option<Access>,
     success: bool,
-    paths: Vec<String>,
+    /// Whether a relative name was resolved against the working directory.
+    /// Only `AT_FDCWD` says so; any other descriptor is a directory the log
+    /// does not name.
+    from_cwd: bool,
+    cwd: Option<String>,
+    parents: Vec<String>,
+    names: Vec<String>,
+}
+
+#[cfg(any(target_os = "linux", test))]
+impl PartialEvent {
+    /// Every file the syscall acted on, as an absolute path.
+    ///
+    /// The kernel writes a `PARENT` record for the directory it looked a name
+    /// up in and a separate record for the name itself, often exactly as the
+    /// program passed it. The parent is not the file acted on: reporting it
+    /// turned `rm b.txt` into a write to the directory, and dropped `b.txt`
+    /// for being relative. A relative name is placed under its own parent
+    /// record, in order, or under the working directory when the call named
+    /// that; with neither, it is not placed anywhere.
+    fn targets(self) -> Vec<String> {
+        let Self {
+            from_cwd,
+            cwd,
+            parents,
+            names,
+            ..
+        } = self;
+        names
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, name)| {
+                if name.starts_with('/') {
+                    return Some(name);
+                }
+                let base = parents
+                    .get(index)
+                    .or_else(|| parents.first())
+                    .filter(|parent| parent.starts_with('/'))
+                    .or_else(|| cwd.as_ref().filter(|_| from_cwd))?;
+                Some(format!("{}/{name}", base.trim_end_matches('/')))
+            })
+            .filter(|path| safe_path(path))
+            .collect()
+    }
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -309,94 +413,80 @@ fn parse_audit_events(text: &str) -> Vec<AuditEvent> {
             event.success = field(line, "success") == Some("yes");
             event.pid = field(line, "pid").and_then(|value| value.parse().ok());
             event.access = syscall_access(line);
+            event.from_cwd = relative_to_cwd(line);
+        } else if line.starts_with("type=CWD ") {
+            event.cwd = quoted_field(line, "cwd").filter(|cwd| safe_path(cwd));
         } else if line.starts_with("type=PATH ")
-            && let Some(path) = quoted_field(line, "name")
-            && safe_path(&path)
+            && let Some(name) = quoted_field(line, "name")
+            && !name.is_empty()
+            && name.len() <= 4_096
+            && !name.chars().any(char::is_control)
         {
-            event.paths.push(path);
+            if field(line, "nametype") == Some("PARENT") {
+                event.parents.push(name);
+            } else {
+                event.names.push(name);
+            }
         }
     }
     groups
-        .into_values()
-        .filter(|event| event.success)
-        .flat_map(|event| {
-            event.paths.into_iter().filter_map(move |path| {
+        .into_iter()
+        .filter(|(_, event)| event.success)
+        .flat_map(|(record, event)| {
+            let (pid, observed_at, access) = (event.pid, event.observed_at, event.access);
+            event.targets().into_iter().filter_map(move |path| {
                 Some(AuditEvent {
-                    pid: event.pid?,
-                    observed_at: event.observed_at?,
+                    record: record.clone(),
+                    pid: pid?,
+                    observed_at: observed_at?,
                     path,
-                    access: event.access?,
+                    access: access?,
                 })
             })
         })
         .collect()
 }
 
+/// Whether a relative name in this call is relative to the working directory.
+///
+/// The calls without a directory argument always are. An `*at` call is only
+/// when its first argument is `AT_FDCWD`, -100, which audit prints as a 32- or
+/// 64-bit register. Any other descriptor names a directory the log does not.
 #[cfg(any(target_os = "linux", test))]
-fn audit_id(line: &str) -> Option<&str> {
-    line.split_once("msg=audit(")?
-        .1
-        .split_once("): ")
-        .map(|(id, _)| id)
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn audit_time_ms(id: &str) -> Option<u64> {
-    let timestamp = id.split_once(':')?.0;
-    let (seconds, fraction) = timestamp.split_once('.').unwrap_or((timestamp, "0"));
-    let seconds = seconds.parse::<u64>().ok()?;
-    let mut milliseconds = fraction.chars().take(3).collect::<String>();
-    while milliseconds.len() < 3 {
-        milliseconds.push('0');
+fn relative_to_cwd(line: &str) -> bool {
+    use crate::audit::Syscall;
+    match crate::audit::syscall(line) {
+        Some(
+            Syscall::Open | Syscall::Execve | Syscall::Rename | Syscall::Unlink | Syscall::Truncate,
+        ) => true,
+        Some(
+            Syscall::Openat
+            | Syscall::Execveat
+            | Syscall::Unlinkat
+            | Syscall::Renameat
+            | Syscall::Renameat2,
+        ) => {
+            matches!(field(line, "a0"), Some("ffffff9c" | "ffffffffffffff9c"))
+        }
+        _ => false,
     }
-    Some(
-        seconds
-            .saturating_mul(1_000)
-            .saturating_add(milliseconds.parse::<u64>().ok()?),
-    )
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    line.split_ascii_whitespace()
-        .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn quoted_field(line: &str, name: &str) -> Option<String> {
-    let marker = format!("{name}=\"");
-    let rest = line.split_once(&marker)?.1;
-    Some(rest[..rest.find('"')?].replace("\\x20", " "))
 }
 
 #[cfg(any(target_os = "linux", test))]
 fn syscall_access(line: &str) -> Option<Access> {
-    let syscall = field(line, "syscall")?;
-    if matches!(syscall, "execve" | "59" | "221") {
-        return Some(Access::Execute);
-    }
-    if matches!(
-        syscall,
-        "unlink"
-            | "unlinkat"
-            | "rename"
-            | "renameat"
-            | "truncate"
-            | "87"
-            | "263"
-            | "82"
-            | "264"
-            | "76"
-    ) {
-        return Some(Access::Write);
-    }
-    if !matches!(syscall, "open" | "openat" | "2" | "56" | "257") {
-        return None;
-    }
-    let flags = if matches!(syscall, "open" | "2") {
-        field(line, "a1")?
-    } else {
-        field(line, "a2")?
+    use crate::audit::Syscall;
+    let syscall = crate::audit::syscall(line)?;
+    let flags = match syscall {
+        Syscall::Execve | Syscall::Execveat => return Some(Access::Execute),
+        Syscall::Unlink
+        | Syscall::Unlinkat
+        | Syscall::Rename
+        | Syscall::Renameat
+        | Syscall::Renameat2
+        | Syscall::Truncate => return Some(Access::Write),
+        Syscall::Open => field(line, "a1")?,
+        Syscall::Openat => field(line, "a2")?,
+        Syscall::Close | Syscall::Connect | Syscall::Sendto | Syscall::Sendmsg => return None,
     };
     let flags = u64::from_str_radix(flags.trim_start_matches("0x"), 16).ok()?;
     Some(
@@ -464,9 +554,9 @@ mod tests {
         assert_eq!(
             parse_windows_security_events(fixture),
             vec![
-                AuditEvent { pid: 700, observed_at: 1_700_000_000_100, path: r"C:\Users\test\.ssh\id_ed25519".into(), access: Access::Read },
-                AuditEvent { pid: 700, observed_at: 1_700_000_000_200, path: r"C:\Users\test\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\agent.cmd".into(), access: Access::Write },
-                AuditEvent { pid: 701, observed_at: 1_700_000_000_300, path: r"\\server\share\tool.exe".into(), access: Access::Execute },
+                AuditEvent { record: String::new(), pid: 700, observed_at: 1_700_000_000_100, path: r"C:\Users\test\.ssh\id_ed25519".into(), access: Access::Read },
+                AuditEvent { record: String::new(), pid: 700, observed_at: 1_700_000_000_200, path: r"C:\Users\test\AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup\agent.cmd".into(), access: Access::Write },
+                AuditEvent { record: String::new(), pid: 701, observed_at: 1_700_000_000_300, path: r"\\server\share\tool.exe".into(), access: Access::Execute },
             ]
         );
     }
@@ -502,23 +592,25 @@ mod tests {
     #[test]
     fn audit_records_require_matching_success_pid_path_and_known_syscall() {
         let fixture = concat!(
-            "type=SYSCALL msg=audit(1700000000.100:41): syscall=257 success=yes a2=0 pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c000003e syscall=257 success=yes a2=0 pid=700\n",
             "type=PATH msg=audit(1700000000.100:41): name=\"/Users/test/.ssh/id_ed25519\"\n",
-            "type=SYSCALL msg=audit(1700000000.200:42): syscall=257 success=yes a2=241 pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.200:42): arch=c000003e syscall=257 success=yes a2=241 pid=700\n",
             "type=PATH msg=audit(1700000000.200:42): name=\"/Users/test/Library/LaunchAgents/evil.plist\"\n",
-            "type=SYSCALL msg=audit(1700000000.300:43): syscall=257 success=no a2=0 pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.300:43): arch=c000003e syscall=257 success=no a2=0 pid=700\n",
             "type=PATH msg=audit(1700000000.300:43): name=\"/denied\"\n",
         );
         assert_eq!(
             parse_audit_events(fixture),
             vec![
                 AuditEvent {
+                    record: "1700000000.100:41".into(),
                     pid: 700,
                     observed_at: 1_700_000_000_100,
                     path: "/Users/test/.ssh/id_ed25519".into(),
                     access: Access::Read
                 },
                 AuditEvent {
+                    record: "1700000000.200:42".into(),
                     pid: 700,
                     observed_at: 1_700_000_000_200,
                     path: "/Users/test/Library/LaunchAgents/evil.plist".into(),
@@ -532,9 +624,9 @@ mod tests {
     fn parser_handles_exec_mutation_spaces_and_malformed_input() {
         let fixture = concat!(
             "garbage\n",
-            "type=SYSCALL msg=audit(1.0:1): syscall=59 success=yes pid=9\n",
+            "type=SYSCALL msg=audit(1.0:1): arch=c000003e syscall=59 success=yes pid=9\n",
             "type=PATH msg=audit(1.0:1): name=\"/tmp/tool\\x20name\"\n",
-            "type=SYSCALL msg=audit(1.0:2): syscall=87 success=yes pid=9\n",
+            "type=SYSCALL msg=audit(1.0:2): arch=c000003e syscall=87 success=yes pid=9\n",
             "type=PATH msg=audit(1.0:2): name=\"/tmp/old\"\n",
         );
         let events = parse_audit_events(fixture);
@@ -542,12 +634,14 @@ mod tests {
             events,
             vec![
                 AuditEvent {
+                    record: "1.0:1".into(),
                     pid: 9,
                     observed_at: 1_000,
                     path: "/tmp/tool name".into(),
                     access: Access::Execute
                 },
                 AuditEvent {
+                    record: "1.0:2".into(),
                     pid: 9,
                     observed_at: 1_000,
                     path: "/tmp/old".into(),
@@ -557,9 +651,97 @@ mod tests {
         );
     }
 
+    /// `rm b.txt` on the Kali aarch64 lab, trimmed of fields the parser does
+    /// not read. aarch64 numbers `unlinkat` 35; the kernel records the resolved
+    /// parent directory and the name exactly as the program passed it.
+    const KALI_RM: &str = concat!(
+        "type=SYSCALL msg=audit(1790152037.611:89): arch=c00000b7 syscall=35 success=yes exit=0 a0=ffffff9c a1=aaaae121e3f0 a2=0 pid=73360 comm=\"rm\" exe=\"/usr/bin/rm\" key=\"s2probe\"\n",
+        "type=CWD msg=audit(1790152037.611:89): cwd=\"/tmp/s2probe.a2Ot\"\n",
+        "type=PATH msg=audit(1790152037.611:89): item=0 name=\"/tmp/s2probe.a2Ot\" nametype=PARENT\n",
+        "type=PATH msg=audit(1790152037.611:89): item=1 name=\"b.txt\" nametype=DELETE\n",
+    );
+
+    /// `mv a.txt b.txt` on the same lab: `renameat2`, 276, two parents and the
+    /// two names.
+    const KALI_MV: &str = concat!(
+        "type=SYSCALL msg=audit(1790152037.611:77): arch=c00000b7 syscall=276 success=yes exit=0 a0=ffffffffffffff9c a1=fffff6d16d85 a2=ffffffffffffff9c pid=73358 comm=\"mv\" exe=\"/usr/bin/mv\" key=\"s2probe\"\n",
+        "type=CWD msg=audit(1790152037.611:77): cwd=\"/tmp/s2probe.a2Ot\"\n",
+        "type=PATH msg=audit(1790152037.611:77): item=0 name=\"/tmp/s2probe.a2Ot\" nametype=PARENT\n",
+        "type=PATH msg=audit(1790152037.611:77): item=1 name=\"/tmp/s2probe.a2Ot\" nametype=PARENT\n",
+        "type=PATH msg=audit(1790152037.611:77): item=2 name=\"a.txt\" nametype=DELETE\n",
+        "type=PATH msg=audit(1790152037.611:77): item=3 name=\"b.txt\" nametype=CREATE\n",
+    );
+
+    fn paths(events: &[AuditEvent]) -> Vec<(&str, Access)> {
+        events
+            .iter()
+            .map(|event| (event.path.as_str(), event.access))
+            .collect()
+    }
+
+    /// The delete names the file, not a write to the directory holding it.
+    #[test]
+    fn an_aarch64_delete_names_the_deleted_file() {
+        assert_eq!(
+            paths(&parse_audit_events(KALI_RM)),
+            vec![("/tmp/s2probe.a2Ot/b.txt", Access::Write)]
+        );
+    }
+
+    #[test]
+    fn an_aarch64_rename_names_both_files_and_neither_directory() {
+        let events = parse_audit_events(KALI_MV);
+        let mut seen = paths(&events);
+        seen.sort_unstable();
+        assert_eq!(
+            seen,
+            vec![
+                ("/tmp/s2probe.a2Ot/a.txt", Access::Write),
+                ("/tmp/s2probe.a2Ot/b.txt", Access::Write),
+            ]
+        );
+    }
+
+    /// aarch64 `fsync` is 82, which is `rename` on x86-64; x86-64 `clone` is
+    /// 56, which is `openat` on aarch64. Neither touches a file's contents.
+    #[test]
+    fn a_syscall_number_is_read_for_the_architecture_that_recorded_it() {
+        let fixture = concat!(
+            "type=SYSCALL msg=audit(1.0:1): arch=c00000b7 syscall=82 success=yes pid=9\n",
+            "type=PATH msg=audit(1.0:1): item=0 name=\"/home/u/.bashrc\" nametype=NORMAL\n",
+            "type=SYSCALL msg=audit(1.0:2): arch=c000003e syscall=56 success=yes a2=0 pid=9\n",
+            "type=PATH msg=audit(1.0:2): item=0 name=\"/home/u/.ssh/id_rsa\" nametype=NORMAL\n",
+            "type=SYSCALL msg=audit(1.0:3): arch=c00000b7 syscall=56 success=yes a2=0 pid=9\n",
+            "type=PATH msg=audit(1.0:3): item=0 name=\"/home/u/.ssh/id_ed25519\" nametype=NORMAL\n",
+        );
+        assert_eq!(
+            paths(&parse_audit_events(fixture)),
+            vec![("/home/u/.ssh/id_ed25519", Access::Read)]
+        );
+    }
+
+    /// A name relative to a directory descriptor, with no parent record to
+    /// resolve it against, cannot be placed anywhere, so it is not guessed.
+    #[test]
+    fn a_relative_name_without_a_known_directory_is_not_guessed() {
+        let fixture = concat!(
+            "type=SYSCALL msg=audit(1.0:1): arch=c00000b7 syscall=56 success=yes a0=5 a2=0 pid=9\n",
+            "type=CWD msg=audit(1.0:1): cwd=\"/home/u\"\n",
+            "type=PATH msg=audit(1.0:1): item=0 name=\"id_rsa\" nametype=NORMAL\n",
+        );
+        assert!(parse_audit_events(fixture).is_empty());
+        // The same name opened relative to the working directory is placed.
+        let cwd = fixture.replace("a0=5", "a0=ffffff9c");
+        assert_eq!(
+            paths(&parse_audit_events(&cwd)),
+            vec![("/home/u/id_rsa", Access::Read)]
+        );
+    }
+
     #[test]
     fn event_window_rejects_stale_future_and_recycled_pid_records() {
         let event = AuditEvent {
+            record: String::new(),
             pid: 9,
             observed_at: 10_000,
             path: "/tmp/x".into(),

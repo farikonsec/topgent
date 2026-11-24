@@ -6,6 +6,7 @@
 import { $, clock, el } from "../dom.mjs";
 import { session } from "../state.mjs";
 import { makeTable } from "../table.mjs";
+import { openInspector } from "../inspector.mjs";
 
 export function renderContext() {
   const context = session.data.context ?? { enabled:false, records:[] };
@@ -36,15 +37,31 @@ export function renderContext() {
     host.append(el("div", { className:"empty", textContent:"Context is ready, but this session.selected agent has not emitted a correlated lifecycle event yet. Start a new task or turn after its adapter is connected." }));
     return;
   }
-  const rows = records.map(record => el("tr", {}, [
-    el("td", { textContent:clock(record.observed_at) }),
-    el("td", {}, el("span", { className:"mono", textContent:record.session_id })),
-    el("td", { textContent:record.summary }),
-    el("td", { textContent:record.objective }),
-    el("td", { textContent:record.tool }),
-    el("td", { textContent:record.outcome }),
-    el("td", {}, el("span", { className:record.matched?"mono":"mono context-unmatched", textContent:`${record.source}${record.matched?"":" · unmatched"}` }))
-  ]));
+  const rows = records.map(record => {
+    const tr = el("tr", { className:"clickable" }, [
+      el("td", { textContent:clock(record.observed_at) }),
+      el("td", {}, el("span", { className:"mono", textContent:record.session_id })),
+      el("td", { textContent:record.summary }),
+      el("td", { textContent:record.objective }),
+      el("td", { textContent:record.tool }),
+      el("td", { textContent:record.outcome }),
+      el("td", {}, el("span", { className:record.matched?"mono":"mono context-unmatched", textContent:`${record.source}${record.matched?"":" · unmatched"}` }))
+    ]);
+    tr.onclick = () => openInspector({
+      title: record.objective || record.session_id,
+      plain: record.summary,
+      context: "Agent-supplied and sanitized; host evidence stays authoritative when they disagree.",
+      rows: [
+        ["session", record.session_id, true],
+        ["objective", record.objective],
+        ["tool", record.tool],
+        ["outcome", record.outcome],
+        ["source", `${record.source}${record.matched ? "" : " · unmatched"}`],
+        ["when", clock(record.observed_at)],
+      ],
+    });
+    return tr;
+  });
   host.append(makeTable("context", [
     {key:"observed_at",label:"When"}, {key:"session_id",label:"Session"},
     {key:"summary",label:"Sanitized summary"}, {key:"objective",label:"Objective"},

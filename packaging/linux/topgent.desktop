@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Topgent
+Comment=AI agent security monitor
+Exec=topgent-ui
+Icon=topgent
+Terminal=false
+Categories=System;Security;Monitor;

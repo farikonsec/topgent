@@ -19,6 +19,8 @@
 //! a later successful `close` for the same PID/file descriptor. Only recent
 //! lifecycle edges whose PID still identifies the same process are admitted.
 
+#[cfg(any(target_os = "linux", test, fuzzing))]
+use crate::audit::record::{audit_id, audit_time_ms, field};
 #[cfg(target_os = "linux")]
 use crate::emit;
 use crate::{Clock, CollectError, Collector};
@@ -127,6 +129,7 @@ impl Collector for NetworkEventCollector {
         #[cfg(target_os = "linux")]
         {
             let text = read_bounded_tail(&self.audit_log)?;
+            hand_over(&text, clock.now().0);
             let processes = crate::process::snapshot()
                 .into_iter()
                 .map(|process| (process.pid, (process.started_at.0, process.subject())))
@@ -167,7 +170,7 @@ impl Collector for NetworkEventCollector {
                             clock,
                             subject.clone(),
                             Claim::SocketOpen {
-                                protocol: topgent_facts::Protocol::Tcp,
+                                protocol: event.protocol(&live_sockets),
                                 bytes: None,
                                 host: event.host,
                                 port: event.port,
@@ -191,6 +194,40 @@ impl Collector for NetworkEventCollector {
                 .collect())
         }
     }
+}
+
+/// Every connect, refused ones included, for the report to resolve against
+/// process history.
+#[cfg(target_os = "linux")]
+fn hand_over(text: &str, now: u64) {
+    use crate::observed::{ActionKind, ObservedAction, Stream, lineage_offset, publish};
+    let offset = lineage_offset();
+    let programs = crate::audit::exec::programs(text);
+    publish(
+        Stream::Connect,
+        connect_records(text)
+            .into_iter()
+            .map(|connect| {
+                ObservedAction::new(
+                    &connect.record,
+                    connect.pid,
+                    connect.at,
+                    offset,
+                    ActionKind::Connect {
+                        host: connect.host,
+                        port: connect.port,
+                        datagram: connect.datagram,
+                        result: connect.result,
+                    },
+                )
+            })
+            .map(|mut action| {
+                action.program = programs.get(&action.record).cloned();
+                action
+            })
+            .collect(),
+        now,
+    );
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -289,6 +326,8 @@ pub struct ConnectionEvent {
     host: String,
     port: u16,
     pending: bool,
+    /// A datagram sent to a named address rather than a connection.
+    datagram: bool,
     closed_at: Option<u64>,
 }
 
@@ -315,6 +354,24 @@ enum AuditResult {
     Failed,
     Success,
     Pending,
+}
+
+#[cfg(any(target_os = "linux", test, fuzzing))]
+impl ConnectionEvent {
+    /// The protocol this record can support, which is less than it looks.
+    ///
+    /// Audit names the syscall and the address, not the socket type, and
+    /// `connect` succeeds on a UDP socket as readily as on a TCP one. A
+    /// datagram sent to a named address is never TCP. So the record states no
+    /// protocol, and only a live TCP listing holding the same process, host and
+    /// port turns a connection into TCP.
+    fn protocol(&self, live_tcp: &BTreeSet<(u32, String, u16)>) -> topgent_facts::Protocol {
+        if !self.datagram && live_tcp.contains(&(self.pid, self.host.clone(), self.port)) {
+            topgent_facts::Protocol::Tcp
+        } else {
+            topgent_facts::Protocol::Unstated
+        }
+    }
 }
 
 #[derive(Default)]
@@ -398,12 +455,8 @@ fn event_is_confirmed(event: &ConnectionEvent, live: &BTreeSet<(u32, String, u16
 }
 
 #[cfg(any(target_os = "linux", test, fuzzing))]
-/// Read connections and datagrams out of an audit-log tail.
-///
-/// Public for the same reason: this is the parser that reads a log any process
-/// able to write to it can shape, so it is the one most worth fuzzing.
-#[must_use]
-pub fn parse_audit_connections(text: &str) -> Vec<ConnectionEvent> {
+/// The records in `text`, grouped by record id.
+fn audit_groups(text: &str) -> BTreeMap<String, PartialEvent> {
     let mut groups = BTreeMap::<String, PartialEvent>::new();
     for line in text.lines() {
         let Some(id) = audit_id(line) else { continue };
@@ -417,14 +470,14 @@ pub fn parse_audit_connections(text: &str) -> Vec<ConnectionEvent> {
             } else {
                 AuditResult::Failed
             };
-            // Numbers as well as names, because auditd prints the number
-            // unless it was built with the syscall table. The two architectures
-            // this ships for number them differently: x86-64 first, aarch64
-            // second.
-            event.operation = match field(line, "syscall") {
-                Some("connect" | "42" | "203") => AuditOperation::Connect,
-                Some("sendto" | "44" | "206" | "sendmsg" | "46" | "211") => AuditOperation::Send,
-                Some("close" | "3" | "57") => AuditOperation::Close,
+            // Read with the record's own architecture: the same number is a
+            // different syscall on x86-64 and aarch64.
+            event.operation = match crate::audit::syscall(line) {
+                Some(crate::audit::Syscall::Connect) => AuditOperation::Connect,
+                Some(crate::audit::Syscall::Sendto | crate::audit::Syscall::Sendmsg) => {
+                    AuditOperation::Send
+                }
+                Some(crate::audit::Syscall::Close) => AuditOperation::Close,
                 _ => AuditOperation::Other,
             };
             event.pid = field(line, "pid").and_then(|value| value.parse().ok());
@@ -433,6 +486,77 @@ pub fn parse_audit_connections(text: &str) -> Vec<ConnectionEvent> {
             event.endpoint = field(line, "saddr").and_then(parse_sockaddr);
         }
     }
+    groups
+}
+
+#[cfg(any(target_os = "linux", test))]
+/// One connect or addressed send, with its result, failures included.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ConnectRecord {
+    /// The record id.
+    pub record: String,
+    /// The process.
+    pub pid: u32,
+    /// When, by the wall clock.
+    pub at: u64,
+    /// Address literal.
+    pub host: String,
+    /// Port.
+    pub port: u16,
+    /// A datagram sent to a named address rather than a connection.
+    pub datagram: bool,
+    /// What the call returned.
+    pub result: crate::observed::ConnectResult,
+}
+
+#[cfg(any(target_os = "linux", test))]
+/// Every connect, and every first send to one address by one process, with
+/// its record id and result. Unlike [`parse_audit_connections`], a refused
+/// connect is kept: it is something the process did, and what it got back.
+pub(crate) fn connect_records(text: &str) -> Vec<ConnectRecord> {
+    use crate::observed::ConnectResult;
+    let mut seen_sends = BTreeSet::<(u32, String, u16)>::new();
+    let mut records: Vec<ConnectRecord> = audit_groups(text)
+        .into_iter()
+        .filter_map(|(record, event)| {
+            let datagram = match event.operation {
+                AuditOperation::Connect => false,
+                AuditOperation::Send => true,
+                AuditOperation::Close | AuditOperation::Other => return None,
+            };
+            let (host, port) = event.endpoint?;
+            Some(ConnectRecord {
+                record,
+                pid: event.pid.filter(|pid| *pid > 0)?,
+                at: event.observed_at?,
+                host,
+                port,
+                datagram,
+                result: match event.result {
+                    AuditResult::Success => ConnectResult::Connected,
+                    AuditResult::Pending => ConnectResult::InProgress,
+                    AuditResult::Failed => ConnectResult::Failed,
+                },
+            })
+        })
+        .collect();
+    records.sort_by_key(|record| record.at);
+    // A process sending to one address once a second is one destination, not
+    // one action per datagram.
+    records.retain(|record| {
+        !record.datagram || seen_sends.insert((record.pid, record.host.clone(), record.port))
+    });
+    records
+}
+
+#[cfg(any(target_os = "linux", test, fuzzing))]
+/// Read connections and datagrams out of an audit-log tail.
+///
+/// Public for the same reason: this is the parser that reads a log any process
+/// able to write to it can shape, so it is the one most worth fuzzing.
+#[must_use]
+pub fn parse_audit_connections(text: &str) -> Vec<ConnectionEvent> {
+    let groups = audit_groups(text);
     let mut syscalls = groups
         .into_values()
         .filter(|event| event.observed_at.is_some() && event.pid.is_some() && event.fd.is_some())
@@ -455,6 +579,7 @@ pub fn parse_audit_connections(text: &str) -> Vec<ConnectionEvent> {
                 host,
                 port,
                 pending: event.result == AuditResult::Pending,
+                datagram: false,
                 closed_at: None,
             });
             open.insert((pid, fd), connections.len() - 1);
@@ -484,6 +609,7 @@ pub fn parse_audit_connections(text: &str) -> Vec<ConnectionEvent> {
                 host,
                 port,
                 pending: false,
+                datagram: true,
                 closed_at: None,
             });
         } else if event.operation == AuditOperation::Close
@@ -569,36 +695,6 @@ pub fn parse_sockaddr(hex: &str) -> Option<(String, u16)> {
     }
 }
 
-#[cfg(any(target_os = "linux", test, fuzzing))]
-fn audit_id(line: &str) -> Option<&str> {
-    line.split_once("msg=audit(")?
-        .1
-        .split_once("): ")
-        .map(|(id, _)| id)
-}
-
-#[cfg(any(target_os = "linux", test, fuzzing))]
-fn audit_time_ms(id: &str) -> Option<u64> {
-    let timestamp = id.split_once(':')?.0;
-    let (seconds, fraction) = timestamp.split_once('.').unwrap_or((timestamp, "0"));
-    let seconds = seconds.parse::<u64>().ok()?;
-    let mut milliseconds = fraction.chars().take(3).collect::<String>();
-    while milliseconds.len() < 3 {
-        milliseconds.push('0');
-    }
-    Some(
-        seconds
-            .saturating_mul(1_000)
-            .saturating_add(milliseconds.parse::<u64>().ok()?),
-    )
-}
-
-#[cfg(any(target_os = "linux", test, fuzzing))]
-fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    line.split_ascii_whitespace()
-        .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))
-}
-
 #[cfg(target_os = "linux")]
 fn read_bounded_tail(path: &std::path::Path) -> Result<String, CollectError> {
     use std::io::{Read, Seek, SeekFrom};
@@ -634,8 +730,8 @@ mod tests {
     use std::fmt::Write as _;
 
     use super::{
-        AttemptEvent, ConnectionEvent, attempt_matches_process, event_is_confirmed,
-        event_matches_process, parse_audit_connections, parse_sockaddr,
+        AttemptEvent, ConnectionEvent, attempt_matches_process, connect_records,
+        event_is_confirmed, event_matches_process, parse_audit_connections, parse_sockaddr,
         parse_windows_filtering_events,
     };
     use std::collections::BTreeSet;
@@ -706,7 +802,7 @@ mod tests {
     #[test]
     fn a_datagram_names_its_destination_and_the_process_that_sent_it() {
         let text = concat!(
-            "type=SYSCALL msg=audit(1700000000.100:41): syscall=44 success=yes pid=700 a0=3\n",
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c000003e syscall=44 success=yes pid=700 a0=3\n",
             "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02000050CB00716E0000000000000000\n",
         );
         let events = parse_audit_connections(text);
@@ -725,7 +821,7 @@ mod tests {
             let (at, id) = (1_700_000_000 + n, 100 + n);
             let _ = writeln!(
                 text,
-                "type=SYSCALL msg=audit({at}.100:{id}): syscall=44 success=yes pid=700 a0=3"
+                "type=SYSCALL msg=audit({at}.100:{id}): arch=c000003e syscall=44 success=yes pid=700 a0=3"
             );
             let _ = writeln!(
                 text,
@@ -745,20 +841,91 @@ mod tests {
     #[test]
     fn a_close_does_not_give_a_datagram_a_duration() {
         let text = concat!(
-            "type=SYSCALL msg=audit(1700000000.100:41): syscall=44 success=yes pid=700 a0=3\n",
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c000003e syscall=44 success=yes pid=700 a0=3\n",
             "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02000050CB00716E0000000000000000\n",
-            "type=SYSCALL msg=audit(1700000009.100:42): syscall=3 success=yes pid=700 a0=3\n",
+            "type=SYSCALL msg=audit(1700000009.100:42): arch=c000003e syscall=3 success=yes pid=700 a0=3\n",
         );
         let events = parse_audit_connections(text);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].closed_at, None, "a datagram was given a duration");
     }
 
+    /// For attribution every connect counts, refused ones included, each
+    /// with its record id and what the call returned.
+    #[test]
+    fn connect_records_keep_the_result_and_the_record_id() {
+        use crate::observed::ConnectResult;
+        let text = concat!(
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c00000b7 syscall=203 success=yes exit=0 pid=700 a0=3\n",
+            "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02001F907F0000010000000000000000\n",
+            "type=SYSCALL msg=audit(1700000000.200:42): arch=c00000b7 syscall=203 success=no exit=-111 pid=701 a0=3\n",
+            "type=SOCKADDR msg=audit(1700000000.200:42): saddr=02001F917F0000010000000000000000\n",
+            "type=SYSCALL msg=audit(1700000000.300:43): arch=c00000b7 syscall=203 success=no exit=-115 pid=702 a0=3\n",
+            "type=SOCKADDR msg=audit(1700000000.300:43): saddr=02001F907F0000010000000000000000\n",
+            "type=SYSCALL msg=audit(1700000000.400:44): arch=c00000b7 syscall=206 success=yes pid=703 a0=4\n",
+            "type=SOCKADDR msg=audit(1700000000.400:44): saddr=020000357F0000350000000000000000\n",
+            "type=SYSCALL msg=audit(1700000000.500:45): arch=c00000b7 syscall=206 success=yes pid=703 a0=4\n",
+            "type=SOCKADDR msg=audit(1700000000.500:45): saddr=020000357F0000350000000000000000\n",
+        );
+        let records = connect_records(text);
+        let summary: Vec<(&str, u32, &str, u16, bool, ConnectResult)> = records
+            .iter()
+            .map(|r| {
+                (
+                    r.record.as_str(),
+                    r.pid,
+                    r.host.as_str(),
+                    r.port,
+                    r.datagram,
+                    r.result,
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            [
+                (
+                    "1700000000.100:41",
+                    700,
+                    "127.0.0.1",
+                    8080,
+                    false,
+                    ConnectResult::Connected
+                ),
+                (
+                    "1700000000.200:42",
+                    701,
+                    "127.0.0.1",
+                    8081,
+                    false,
+                    ConnectResult::Failed
+                ),
+                (
+                    "1700000000.300:43",
+                    702,
+                    "127.0.0.1",
+                    8080,
+                    false,
+                    ConnectResult::InProgress
+                ),
+                (
+                    "1700000000.400:44",
+                    703,
+                    "127.0.0.53",
+                    53,
+                    true,
+                    ConnectResult::Connected
+                ),
+            ]
+        );
+        assert_eq!(records.first().map(|r| r.at), Some(1_700_000_000_100));
+    }
+
     /// A refused send is not a destination reached.
     #[test]
     fn a_failed_datagram_is_not_recorded_as_one_that_arrived() {
         let text = concat!(
-            "type=SYSCALL msg=audit(1700000000.100:41): syscall=44 success=no pid=700 a0=3\n",
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c000003e syscall=44 success=no pid=700 a0=3\n",
             "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02000050CB00716E0000000000000000\n",
         );
         assert!(parse_audit_connections(text).is_empty());
@@ -767,11 +934,11 @@ mod tests {
     #[test]
     fn joins_only_successful_connect_syscalls_to_exact_sockaddr_records() {
         let fixture = concat!(
-            "type=SYSCALL msg=audit(1700000000.100:41): syscall=42 success=yes pid=700 a0=d\n",
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c000003e syscall=42 success=yes pid=700 a0=d\n",
             "type=SOCKADDR msg=audit(1700000000.100:41): saddr=020001BBC000020A0000000000000000\n",
-            "type=SYSCALL msg=audit(1700000000.200:42): syscall=42 success=no pid=700 a0=e\n",
+            "type=SYSCALL msg=audit(1700000000.200:42): arch=c000003e syscall=42 success=no pid=700 a0=e\n",
             "type=SOCKADDR msg=audit(1700000000.200:42): saddr=02000035080808080000000000000000\n",
-            "type=SYSCALL msg=audit(1700000000.300:43): syscall=257 success=yes pid=700 a0=f\n",
+            "type=SYSCALL msg=audit(1700000000.300:43): arch=c000003e syscall=257 success=yes pid=700 a0=f\n",
             "type=SOCKADDR msg=audit(1700000000.300:43): saddr=020001BB7F0000010000000000000000\n",
         );
         assert_eq!(
@@ -783,6 +950,7 @@ mod tests {
                 host: "192.0.2.10".into(),
                 port: 443,
                 pending: false,
+                datagram: false,
                 closed_at: None,
             }]
         );
@@ -796,7 +964,7 @@ mod tests {
             "type=SYSCALL msg=audit(1700000000.150:42): syscall=close success=yes pid=701 a0=d\n",
             "type=SYSCALL msg=audit(1700000000.175:43): syscall=close success=no pid=700 a0=d\n",
             "type=SYSCALL msg=audit(1700000000.350:44): syscall=close success=yes pid=700 a0=e\n",
-            "type=SYSCALL msg=audit(1700000000.600:45): syscall=3 success=yes pid=700 a0=d\n",
+            "type=SYSCALL msg=audit(1700000000.600:45): arch=c000003e syscall=3 success=yes pid=700 a0=d\n",
         );
         assert_eq!(
             parse_audit_connections(fixture),
@@ -807,6 +975,7 @@ mod tests {
                 host: "192.0.2.10".into(),
                 port: 443,
                 pending: false,
+                datagram: false,
                 closed_at: Some(1_700_000_000_600),
             }]
         );
@@ -851,6 +1020,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 4173,
             pending: false,
+            datagram: false,
             closed_at: None,
         };
         assert!(event_matches_process(&event, 9_000, 12_000));
@@ -867,6 +1037,63 @@ mod tests {
         assert!(!event_matches_process(&recently_closed, 1_001, 20_100));
     }
 
+    /// A real aarch64 connect from the Kali lab, then an aarch64 `close` (57)
+    /// on the same descriptor, then an x86-64 57, which is `fork`.
+    #[test]
+    fn close_is_read_for_the_architecture_that_recorded_it() {
+        let connect = concat!(
+            "type=SYSCALL msg=audit(1788813135.247:432356): arch=c00000b7 syscall=203 success=yes exit=0 a0=3 pid=1648471\n",
+            "type=SOCKADDR msg=audit(1788813135.247:432356): saddr=020001BBC000020A0000000000000000\n",
+        );
+        let forked = format!(
+            "{connect}type=SYSCALL msg=audit(1788813136.000:432400): arch=c000003e syscall=57 success=yes a0=3 pid=1648471\n"
+        );
+        let events = parse_audit_connections(&forked);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].closed_at, None, "an x86-64 fork closed a socket");
+
+        let closed = format!(
+            "{connect}type=SYSCALL msg=audit(1788813136.000:432401): arch=c00000b7 syscall=57 success=yes a0=3 pid=1648471\n"
+        );
+        let events = parse_audit_connections(&closed);
+        assert_eq!(events[0].closed_at, Some(1_788_813_136_000));
+    }
+
+    /// aarch64 46 is `ftruncate`, which is `sendmsg` on x86-64. A truncate
+    /// that happens to share an audit record with a socket address is not a
+    /// datagram.
+    #[test]
+    fn an_aarch64_ftruncate_is_not_a_datagram() {
+        let text = concat!(
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c00000b7 syscall=46 success=yes pid=700 a0=3\n",
+            "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02000050CB00716E0000000000000000\n",
+        );
+        assert!(parse_audit_connections(text).is_empty());
+    }
+
+    /// A `connect` record does not say which protocol the socket carries, and
+    /// a datagram is never TCP. Only a live TCP listing that holds the same
+    /// connection can say TCP.
+    #[test]
+    fn protocol_is_tcp_only_when_a_tcp_listing_confirms_it() {
+        use topgent_facts::Protocol;
+        let text = concat!(
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c000003e syscall=42 success=yes pid=700 a0=3\n",
+            "type=SOCKADDR msg=audit(1700000000.100:41): saddr=020001BBC000020A0000000000000000\n",
+            "type=SYSCALL msg=audit(1700000000.200:42): arch=c000003e syscall=44 success=yes pid=700 a0=4\n",
+            "type=SOCKADDR msg=audit(1700000000.200:42): saddr=02000035080808080000000000000000\n",
+        );
+        let events = parse_audit_connections(text);
+        assert_eq!(events.len(), 2);
+        let (connect, datagram) = (&events[0], &events[1]);
+        assert_eq!(connect.protocol(&BTreeSet::new()), Protocol::Unstated);
+        let live = BTreeSet::from([(700, "192.0.2.10".to_owned(), 443)]);
+        assert_eq!(connect.protocol(&live), Protocol::Tcp);
+        // Even a TCP socket to the same place does not make a datagram TCP.
+        let live = BTreeSet::from([(700, "8.8.8.8".to_owned(), 53)]);
+        assert_eq!(datagram.protocol(&live), Protocol::Unstated);
+    }
+
     #[test]
     fn nonblocking_connect_requires_a_matching_live_socket() {
         let event = ConnectionEvent {
@@ -876,6 +1103,7 @@ mod tests {
             host: "127.0.0.1".into(),
             port: 4173,
             pending: true,
+            datagram: false,
             closed_at: None,
         };
         assert!(!event_is_confirmed(&event, &BTreeSet::new()));

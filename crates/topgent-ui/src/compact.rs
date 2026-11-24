@@ -10,27 +10,50 @@
 //! window that tries to be the large one is a large one that nobody can read.
 
 use crate::Message;
-use crate::report::Report;
+use crate::report::{Agent, Report};
 use crate::theme::{self, Region, Style, size, space};
 
 use iced::widget::{Column, button, container, row, text};
 use iced::{Element, Length};
 
-/// The size the window takes in this mode.
+/// The largest regular compact window. Fewer rows use less height.
 pub const SIZE: iced::Size = iced::Size {
-    width: 400.0,
-    height: 232.0,
+    width: 460.0,
+    height: 280.0,
+};
+
+/// The confirmation needs room for the process identity and the guarded
+/// action. It is temporary; leaving the dialog returns to the compact size.
+pub const CONFIRM_SIZE: iced::Size = iced::Size {
+    width: 540.0,
+    height: 410.0,
 };
 
 /// How many agents the strip lists.
 ///
-/// Four, because a strip that scrolls is a strip nobody scrolls. The count on
+/// Three, because a strip that scrolls is a strip nobody scrolls. The count on
 /// the first line always states the whole number, so a reader can see there are
 /// more than they are being shown rather than believing they have seen all.
-const LISTED: usize = 4;
+const LISTED: usize = 3;
+
+/// Leave room for the summary, last event, and every row that will be shown,
+/// without reserving four empty row slots when only one agent is running.
+pub fn size_for(count: usize, scale: f32) -> iced::Size {
+    let rows = count.min(LISTED) + usize::from(count > LISTED);
+    let rows = u16::try_from(rows).unwrap_or(u16::MAX);
+    iced::Size {
+        width: SIZE.width,
+        height: (100.0 + f32::from(rows) * 25.0 * scale.clamp(0.8, 1.5)).clamp(170.0, SIZE.height),
+    }
+}
 
 /// Draw the small window.
-pub fn view<'a>(report: Option<&Report>, sweeping: bool, s: Style) -> Element<'a, Message> {
+pub fn view<'a>(
+    report: Option<&'a Report>,
+    sweeping: bool,
+    status: Option<&str>,
+    s: Style,
+) -> Element<'a, Message> {
     let p = s.palette;
     let worst = report.and_then(Report::worst);
     let count = report.map_or(0, |r| r.agents.len());
@@ -41,7 +64,7 @@ pub fn view<'a>(report: Option<&Report>, sweeping: bool, s: Style) -> Element<'a
     let tint = worst.map_or(p.inert, |a| p.grade(&a.grade));
 
     let latest = report.and_then(|r| r.events.first()).map_or_else(
-        || "nothing has changed since Topgent started".to_owned(),
+        || "no events yet".to_owned(),
         |e| format!("{} · {}", crate::clock::stamp(e.at), e.detail),
     );
 
@@ -52,31 +75,7 @@ pub fn view<'a>(report: Option<&Report>, sweeping: bool, s: Style) -> Element<'a
 
     let mut list = Column::new().spacing(s.pad(space::HAIR));
     for agent in ordered.iter().take(LISTED) {
-        list = list.push(
-            row![
-                text(agent.grade.clone())
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::MICRO))
-                    .color(p.grade(&agent.grade))
-                    .width(Length::Fixed(64.0)),
-                text(agent.score.to_string())
-                    .size(s.type_size(size::MICRO))
-                    .color(p.muted)
-                    .align_x(iced::alignment::Horizontal::Right)
-                    .width(Length::Fixed(26.0)),
-                text(agent.label())
-                    .wrapping(iced::widget::text::Wrapping::None)
-                    .size(s.type_size(size::BODY))
-                    .color(p.text)
-                    .width(Length::Fill),
-                text(agent.pid.to_string())
-                    .font(theme::MONO)
-                    .size(s.type_size(size::MICRO))
-                    .color(p.faint),
-            ]
-            .spacing(s.pad(space::SNUG))
-            .align_y(iced::Alignment::Center),
-        );
+        list = list.push(agent_row(agent, s));
     }
     if ordered.len() > LISTED {
         list = list.push(
@@ -121,7 +120,7 @@ pub fn view<'a>(report: Option<&Report>, sweeping: bool, s: Style) -> Element<'a
         )
         .push(list)
         .push(
-            text(latest)
+            text(status.map_or(latest, str::to_owned))
                 .wrapping(iced::widget::text::Wrapping::None)
                 .size(s.type_size(size::MICRO))
                 .color(p.faint),
@@ -133,6 +132,65 @@ pub fn view<'a>(report: Option<&Report>, sweeping: bool, s: Style) -> Element<'a
         .width(Length::Fill)
         .height(Length::Fill)
         .into()
+}
+
+/// One compact agent stays identifiable while its action keeps its full hit
+/// target. Only the name yields width when the window gets crowded.
+fn agent_row(agent: &Agent, s: Style) -> Element<'_, Message> {
+    let p = s.palette;
+    let grade_width = (s.type_size(size::MICRO) * 6.0).max(64.0);
+    row![
+        text(agent.grade.clone())
+            .font(theme::STRONG)
+            .size(s.type_size(size::MICRO))
+            .color(p.grade(&agent.grade))
+            .width(Length::Fixed(grade_width)),
+        text(agent.score.to_string())
+            .size(s.type_size(size::MICRO))
+            .color(p.muted)
+            .align_x(iced::alignment::Horizontal::Right)
+            .width(Length::Fixed(26.0)),
+        container(
+            text(agent.label())
+                .wrapping(iced::widget::text::Wrapping::None)
+                .size(s.type_size(size::BODY))
+                .color(p.text),
+        )
+        .width(Length::Fill)
+        .clip(true),
+        text(agent.pid.to_string())
+            .font(theme::MONO)
+            .size(s.type_size(size::MICRO))
+            .color(p.faint),
+        button(
+            text("Stop")
+                .font(theme::STRONG)
+                .size(s.type_size(size::MICRO))
+                .color(p.critical),
+        )
+        .on_press(Message::AskStop(agent.pid))
+        .padding([s.pad(space::HAIR), s.pad(space::TIGHT)])
+        .style(move |_, status| button::Style {
+            background: Some(
+                if matches!(status, button::Status::Hovered) {
+                    p.hover()
+                } else {
+                    p.surface
+                }
+                .into()
+            ),
+            text_color: p.critical,
+            border: iced::Border {
+                color: p.critical,
+                width: 1.0,
+                radius: theme::radius::CONTROL.into(),
+            },
+            ..button::Style::default()
+        }),
+    ]
+    .spacing(s.pad(space::SNUG))
+    .align_y(iced::Alignment::Center)
+    .into()
 }
 
 #[cfg(test)]
@@ -162,5 +220,7 @@ mod tests {
             height >= lines + 40.0,
             "{height} cannot hold the {LISTED} agents it lists"
         );
+        assert!(size_for(2, 1.0).height < size_for(5, 1.0).height);
+        assert!(size_for(5, 1.5).height <= SIZE.height);
     }
 }

@@ -79,18 +79,32 @@ pub struct TableRow {
 #[must_use]
 pub fn parse_table(text: &str) -> Vec<TableRow> {
     let mut out = Vec::new();
+    let mut locals = Vec::new();
     for line in text.lines().skip(1) {
         if out.len() >= MAX_ROWS {
             break;
         }
-        if let Some(row) = parse_line(line) {
+        if let Some((row, local)) = parse_line(line) {
             out.push(row);
+            locals.push(local);
+        }
+    }
+    let listeners: Vec<(String, u16)> = out
+        .iter()
+        .filter(|row| row.direction == Direction::Listening)
+        .map(|row| (row.host.clone(), row.port))
+        .collect();
+    for (row, (host, port)) in out.iter_mut().zip(&locals) {
+        if row.direction == Direction::Outbound
+            && super::accepted::arrived_on(host, *port, &listeners)
+        {
+            row.direction = Direction::Inbound;
         }
     }
     out
 }
 
-fn parse_line(line: &str) -> Option<TableRow> {
+fn parse_line(line: &str) -> Option<(TableRow, (String, u16))> {
     let mut fields = line.split_whitespace();
     // sl, local_address, rem_address, st, ... , inode
     let _sl = fields.next()?;
@@ -115,12 +129,15 @@ fn parse_line(line: &str) -> Option<TableRow> {
         (remote, Direction::Outbound)
     };
     let (host, port) = parse_address(address)?;
-    Some(TableRow {
-        host,
-        port,
-        direction,
-        inode,
-    })
+    Some((
+        TableRow {
+            host,
+            port,
+            direction,
+            inode,
+        },
+        parse_address(local)?,
+    ))
 }
 
 /// Every local port in one `/proc/net` socket table, with the inode holding it.

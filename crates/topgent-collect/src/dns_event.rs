@@ -11,18 +11,22 @@
 //! of its records name the process that asked. Only those records are used.
 //! The log is off by default and Topgent never turns it on.
 
+#[cfg(any(target_os = "linux", test))]
+use crate::audit::record::{audit_id, audit_time_ms, field};
 #[cfg(any(target_os = "linux", windows))]
 use crate::emit;
 use crate::{Clock, CollectError, Collector};
 #[cfg(any(target_os = "linux", windows, test))]
 use std::collections::BTreeMap;
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", windows, test))]
+use topgent_facts::Claim;
+#[cfg(any(target_os = "linux", windows))]
+use topgent_facts::Confidence;
+#[cfg(any(target_os = "linux", test))]
 use topgent_facts::Direction;
 #[cfg(any(windows, test))]
 use topgent_facts::DnsOutcome;
 use topgent_facts::Fact;
-#[cfg(any(target_os = "linux", windows))]
-use topgent_facts::{Claim, Confidence};
 
 const ID: &str = "dns_events";
 #[cfg(target_os = "linux")]
@@ -148,20 +152,7 @@ impl Collector for DnsEventCollector {
                         Confidence::Likely,
                         clock,
                         subject.clone(),
-                        Claim::SocketOpen {
-                            protocol: topgent_facts::Protocol::Tcp,
-                            bytes: None,
-                            host: event.resolver,
-                            port: 53,
-                            direction: Direction::Outbound,
-                            // Audit records the contact, not when the socket
-                            // to the resolver was created.
-                            opened_at: None,
-                            // The audit record names the process the kernel attributed
-                            // the syscall to, as it happened. Nothing was searched and
-                            // no key was relaxed.
-                            basis: topgent_facts::MatchBasis::KernelEvent,
-                        },
+                        resolver_claim(event),
                     )
                 })
                 .collect())
@@ -325,6 +316,28 @@ struct PartialEvent {
     endpoint: Option<(String, u16)>,
 }
 
+/// The observation one resolver contact supports.
+#[cfg(any(target_os = "linux", test))]
+fn resolver_claim(event: DnsContact) -> Claim {
+    Claim::SocketOpen {
+        // Audit names the syscall and the address, never the socket type. A
+        // lookup is usually UDP and falls back to TCP; which one this was is
+        // not in the record, and the sensor used to print TCP regardless.
+        protocol: topgent_facts::Protocol::Unstated,
+        bytes: None,
+        host: event.resolver,
+        port: 53,
+        direction: Direction::Outbound,
+        // Audit records the contact, not when the socket
+        // to the resolver was created.
+        opened_at: None,
+        // The audit record names the process the kernel attributed
+        // the syscall to, as it happened. Nothing was searched and
+        // no key was relaxed.
+        basis: topgent_facts::MatchBasis::KernelEvent,
+    }
+}
+
 #[cfg(any(target_os = "linux", test))]
 fn event_matches_process(event: &DnsContact, started_at: u64, now: u64) -> bool {
     event.observed_at >= started_at
@@ -342,8 +355,8 @@ fn parse_dns_contacts(text: &str) -> Vec<DnsContact> {
         if line.starts_with("type=SYSCALL ") {
             event.success = field(line, "success") == Some("yes");
             event.dns_transport = matches!(
-                field(line, "syscall"),
-                Some("sendto" | "connect" | "44" | "42" | "206" | "203")
+                crate::audit::syscall(line),
+                Some(crate::audit::Syscall::Sendto | crate::audit::Syscall::Connect)
             );
             event.pid = field(line, "pid").and_then(|value| value.parse().ok());
         } else if line.starts_with("type=SOCKADDR ") {
@@ -399,36 +412,6 @@ fn parse_sockaddr(value: &str) -> Option<(String, u16)> {
     }
 }
 
-#[cfg(any(target_os = "linux", test))]
-fn audit_id(line: &str) -> Option<&str> {
-    line.split_once("msg=audit(")?
-        .1
-        .split_once("): ")
-        .map(|(id, _)| id)
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn audit_time_ms(id: &str) -> Option<u64> {
-    let timestamp = id.split_once(':')?.0;
-    let (seconds, fraction) = timestamp.split_once('.').unwrap_or((timestamp, "0"));
-    let seconds = seconds.parse::<u64>().ok()?;
-    let mut milliseconds = fraction.chars().take(3).collect::<String>();
-    while milliseconds.len() < 3 {
-        milliseconds.push('0');
-    }
-    Some(
-        seconds
-            .saturating_mul(1_000)
-            .saturating_add(milliseconds.parse::<u64>().ok()?),
-    )
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn field<'a>(line: &'a str, name: &str) -> Option<&'a str> {
-    line.split_ascii_whitespace()
-        .find_map(|part| part.strip_prefix(name)?.strip_prefix('='))
-}
-
 #[cfg(target_os = "linux")]
 fn read_bounded_tail(path: &std::path::Path) -> Result<String, CollectError> {
     use std::io::{Read, Seek, SeekFrom};
@@ -463,21 +446,60 @@ mod tests {
 
     use super::{
         DnsContact, MAX_WINDOWS_DNS_RECORDS, WINDOWS_EVENT_WINDOW_MS, WindowsDnsQuery,
-        event_matches_process, parse_dns_contacts, parse_windows_dns_events,
+        event_matches_process, parse_dns_contacts, parse_windows_dns_events, resolver_claim,
         windows_event_matches_process,
     };
     use topgent_facts::DnsOutcome;
 
+    /// aarch64 42 is `nfsservctl` and 44 is `fstatfs`; neither sends a query.
+    #[test]
+    fn a_syscall_number_is_read_for_the_architecture_that_recorded_it() {
+        let fixture = concat!(
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c00000b7 syscall=42 success=yes pid=700\n",
+            "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02000035080808080000000000000000\n",
+            "type=SYSCALL msg=audit(1700000000.200:42): arch=c00000b7 syscall=206 success=yes pid=701\n",
+            "type=SOCKADDR msg=audit(1700000000.200:42): saddr=02000035080404040000000000000000\n",
+        );
+        let contacts = parse_dns_contacts(fixture);
+        assert_eq!(contacts.len(), 1, "{contacts:?}");
+        assert_eq!(contacts[0].pid, 701);
+    }
+
+    /// A resolver contact read from audit states neither TCP nor UDP. It used
+    /// to be printed as TCP, which is the one thing a plain lookup almost
+    /// never is.
+    #[test]
+    fn a_resolver_contact_does_not_claim_a_protocol() {
+        use topgent_facts::{Claim, Protocol};
+        let contact = DnsContact {
+            pid: 700,
+            observed_at: 1,
+            resolver: "8.8.8.8".into(),
+        };
+        let claim = resolver_claim(contact);
+        assert!(
+            matches!(
+                claim,
+                Claim::SocketOpen {
+                    protocol: Protocol::Unstated,
+                    port: 53,
+                    ..
+                }
+            ),
+            "{claim:?}"
+        );
+    }
+
     #[test]
     fn exact_join_accepts_successful_ipv4_and_ipv6_port_53_contacts_only() {
         let fixture = concat!(
-            "type=SYSCALL msg=audit(1700000000.100:41): syscall=206 success=yes exit=32 pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c00000b7 syscall=206 success=yes exit=32 pid=700\n",
             "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02000035080808080000000000000000\u{1d}SADDR={\n",
-            "type=SYSCALL msg=audit(1700000000.200:42): syscall=203 success=yes exit=0 pid=701\n",
+            "type=SYSCALL msg=audit(1700000000.200:42): arch=c00000b7 syscall=203 success=yes exit=0 pid=701\n",
             "type=SOCKADDR msg=audit(1700000000.200:42): saddr=0A0000350000000020010DB8000000000000000000000053\n",
-            "type=SYSCALL msg=audit(1700000000.300:43): syscall=206 success=yes exit=32 pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.300:43): arch=c00000b7 syscall=206 success=yes exit=32 pid=700\n",
             "type=SOCKADDR msg=audit(1700000000.300:43): saddr=020001BBC000020A0000000000000000\n",
-            "type=SYSCALL msg=audit(1700000000.400:44): syscall=206 success=no exit=-1 pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.400:44): arch=c00000b7 syscall=206 success=no exit=-1 pid=700\n",
             "type=SOCKADDR msg=audit(1700000000.400:44): saddr=02000035010101010000000000000000\n",
         );
         assert_eq!(
@@ -500,11 +522,11 @@ mod tests {
     #[test]
     fn malformed_unix_unrelated_and_mismatched_records_are_rejected() {
         let fixture = concat!(
-            "type=SYSCALL msg=audit(1700000000.100:41): syscall=257 success=yes pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.100:41): arch=c00000b7 syscall=257 success=yes pid=700\n",
             "type=SOCKADDR msg=audit(1700000000.100:41): saddr=02000035080808080000000000000000\n",
-            "type=SYSCALL msg=audit(1700000000.200:42): syscall=206 success=yes pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.200:42): arch=c00000b7 syscall=206 success=yes pid=700\n",
             "type=SOCKADDR msg=audit(1700000000.201:43): saddr=02000035080808080000000000000000\n",
-            "type=SYSCALL msg=audit(1700000000.300:44): syscall=206 success=yes pid=700\n",
+            "type=SYSCALL msg=audit(1700000000.300:44): arch=c00000b7 syscall=206 success=yes pid=700\n",
             "type=SOCKADDR msg=audit(1700000000.300:44): saddr=01002F72756E2F6E7363642F736F636B6574\n",
         );
         assert!(parse_dns_contacts(fixture).is_empty());

@@ -1,0 +1,1 @@
+{"argv":["/usr/bin/printf","%s\\n","x"],"at":1,"auid":1000,"cwd":"/srv/e11","e":"exec","name":"printf","path":"/usr/bin/printf","pid":2,"pidns":4026531836,"program":"printf","start":1,"uid":0}

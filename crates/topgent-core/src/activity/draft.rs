@@ -97,13 +97,11 @@ pub(super) fn fact_draft(
                 match direction {
                     Direction::Outbound => format!("Observed endpoint {where_to}"),
                     Direction::Listening => format!("Observed listener {where_to}"),
+                    Direction::Inbound => format!("Observed accepted connection from {where_to}"),
                 },
                 format!(
                     "{} · {} · {where_to}",
-                    match direction {
-                        Direction::Outbound => "outbound",
-                        Direction::Listening => "listening",
-                    },
+                    direction.as_str(),
                     protocol.as_str()
                 ),
                 "observed socket",
@@ -227,10 +225,7 @@ pub(super) fn closed_socket_draft(
         title: format!("Closed connection to {host}:{port}"),
         detail: format!(
             "{} · {host}:{port} · duration {duration_ms} ms",
-            match direction {
-                Direction::Outbound => "outbound",
-                Direction::Listening => "listening",
-            }
+            direction.as_str()
         ),
         confidence: provenance.confidence,
         collector: provenance.collector.clone(),

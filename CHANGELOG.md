@@ -4,6 +4,63 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-11-24
+
+### Added
+
+#### Incidents
+- Incidents page in the desktop app and web viewer. Each incident card shows kind, time, duration, PID, severity, impact, action, evidence and limits.
+- Workspace exfiltration: a run reads a large part of a workspace, then sends a comparable volume, or keeps retrying, to a destination that is not its model service. Egress is grouped by network owner and totalled over the whole run. Configured in `data/workspace-exfiltration.json`.
+- Secrets read: an agent opens a credential file, a password store or a keychain. A second card when data leaves the host shortly after. Filename signatures follow gitleaks.
+- Honeytokens: `topgent honeytoken plant <dir> | list | remove <path|all>` writes decoy secrets. Reading one raises a critical incident.
+- Network scanning: many ports on one host, or many hosts, within minutes, with no data sent. Configured in `data/network-scanning.json`.
+- File destruction: read-then-delete, rename or rewrite of many files, or in-place rewrites while an encryption tool runs. Configured in `data/files-destroyed.json`.
+- Offensive tool: an agent runs a scanner, cracker or exploitation tool. The incident persists after the tool exits. The tool list has 50 entries in `data/detection-signals.json`.
+- Behaviour-rule incidents: Container Escape, Command & Control, Persistence, Privilege Escalation, Log Tampering, Cryptomining, Credential Access. Mapped in `data/rule-incidents.json`.
+
+#### Interface
+- Overview page, the default in both front ends: running agents, critical count, destinations, incidents, an agent table with model, risk, destinations and status, programs run, findings and recent activity.
+- Simple and Advanced views. Simple lists Overview, Incidents and Settings. Advanced lists every page. The choice is saved.
+- Brand marks for agents and network owners.
+- Files tab: files an agent read, files that look like secrets, and where its data went.
+- Show process: opens the agent's Processes tab on the incident's process with its record expanded.
+- Network tab names the agent that held each socket.
+- Ended agents stay listed for the session with their last evidence and process tree.
+- The window header shows the host OS, version, architecture and kernel.
+- Save the session on close and reopen saved `.topgent` files.
+
+#### Detection
+- New families: Claude Desktop, ChatGPT desktop, ZCode, Unsloth, llama.cpp. 27 families in total.
+- Model servers started by an app (for example Unsloth Studio's llama.cpp server) fold into that app's row.
+- Every model an agent used recently is reported (`models_seen`), not only the current one.
+- Codex model is read from its own log, so the reported model is the one in use.
+- 23 more model provider prefixes, including Gemma, Nemotron, Nova, MiniMax, Inkling and the Mistral models.
+- Each agent carries a `kind`: `agent`, `agent_editor` or `model_runtime`.
+- `summary` on every agent: risks in plain words, ordered `act`, `watch`, `info`.
+
+#### Linux
+- eBPF sensor (`topgent-sensor`): per-process file opens and bytes sent, with dropped-event counts.
+- Process connector events: short-lived processes are recorded.
+- `packaging/linux`: per-user versioned install, uninstall and rollback scripts, and a desktop entry.
+
+#### CLI and tooling
+- `topgent --json --follow --every <ms>`: one report per line until stopped.
+- Fuzz targets for saved sessions, sensor lines and eBPF records.
+- `scripts/model-providers.mjs`: lists OpenRouter models no provider prefix covers. Maintainer tool; Topgent makes no network requests.
+
+### Changed
+- Linux release archives build `topgent-sensor` with the eBPF probe.
+- One palette, font set and metric strip across the desktop app and web viewer.
+- Terse labels and messages across both front ends and incident text.
+- Each desktop window is its own session. History does not carry over between launches.
+- The web viewer reuses one long-running scan, so it reports the same sensors as the desktop app.
+- Processes tab shows each agent's process tree with state, start time, run time and rule hits.
+- Ollama no longer assumes Meta as the provider of every model.
+
+### Security
+- Dependencies updated: tokio 1.54.1, rustix 1.1.6, etherparse 0.21.1, async-executor 1.14.1, clipboard-win 5.4.3.
+- Accepted, with reasons in `osv-scanner.toml`: zvariant, zvariant_derive and zbus_names (unmaintained, reached through iced's Linux theme query) and pin-utils (unmaintained, wasm-only path).
+
 ## [0.5.1] - 2026-09-08
 
 Hardening of the one part of Topgent that holds a privilege. Everything below
@@ -201,7 +258,8 @@ The Linux desktop build is withheld. Tauri renders its Linux window through GTK3
 
 Documented in `THREAT-MODEL.md` and the Limits section of `README.md`. No pre-execution blocking on macOS or Windows, no per-extension attribution within a shared editor process, and no telemetry the platform does not supply.
 
-[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/farikonsec/topgent/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/farikonsec/topgent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/farikonsec/topgent/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/farikonsec/topgent/compare/v0.2.2...v0.4.0

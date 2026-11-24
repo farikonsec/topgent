@@ -5,8 +5,9 @@
 
 import { eventLabel } from "../alerts.mjs";
 import { $, clock, el, rel } from "../dom.mjs";
-import { session, view } from "../state.mjs";
+import { session, view, runName } from "../state.mjs";
 import { changeSort, makeTable, sortedBy } from "../table.mjs";
+import { openInspector } from "../inspector.mjs";
 
 export function renderEvents() {
   const filtered = (session.data.events ?? []).filter(e =>
@@ -20,32 +21,30 @@ export function renderEvents() {
       (session.data.events||[]).length ? "No events match." : "No events yet. Topgent records agents starting and stopping, risk changing, credentials coming into reach, and every action it takes." }));
     $("events").replaceChildren(out); return;
   }
+  const sevClass = s => s === "critical" ? "crit" : s === "high" ? "high" : ["warning","medium"].includes(s) ? "med" : "low";
   const rows = [];
   for (const e of events.slice(0, 500)) {
-    const eventId = e.id ?? `${e.at}:${e.kind}:${e.pid}`;
-    const isOpen = session.expandedEvents.has(eventId);
     const severity = e.severity ?? (["behaviour","recon","credential_exposed","policy_breach"].includes(e.kind) ? "critical" : "info");
-    const row = el("tr", { className:`event-row event-${severity}`, tabIndex:0, ariaExpanded:String(isOpen), title:"Open event details" }, [
+    const row = el("tr", { className:`event-row event-${severity} clickable`, tabIndex:0, title:"Open event details" }, [
       el("td", { className: "mono", title: new Date(e.at).toString() }, [ el("div", { textContent: clock(e.at) }), el("div", { className: "faint", textContent: rel(e.at) + " ago" }) ]),
-      el("td", {}, [el("span", { className:"event-disclosure", textContent:isOpen?"▾":"▸" }), el("span", { className: "kchip k-" + e.kind + (e.direction ? " k-" + e.direction : ""), textContent: eventLabel(e) })]),
-      el("td", { textContent: e.agent }),
+      el("td", {}, [el("span", { className: "kchip k-" + e.kind + (e.direction ? " k-" + e.direction : ""), textContent: eventLabel(e) })]),
+      el("td", { textContent: runName(e.pid, e.started_at, e.agent) }),
       el("td", { className: "mono muted", textContent: String(e.pid) }),
       el("td", { className: "muted", textContent: e.detail }),
     ]);
-    const toggle = () => { if (isOpen) session.expandedEvents.delete(eventId); else session.expandedEvents.add(eventId); renderEvents(); };
-    row.onclick = toggle;
-    row.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); } };
+    const open = () => openInspector({
+      title: eventLabel(e), sevLabel: severity.toUpperCase(), sevClass: sevClass(severity),
+      plain: e.detail,
+      rows: [
+        ["event code", e.kind, true],
+        ["agent instance", `${runName(e.pid, e.started_at, e.agent)} · pid ${e.pid}`],
+        ["recorded", new Date(e.at).toISOString()],
+        ["evidence", e.evidence ?? "persistent local event journal"],
+      ],
+    });
+    row.onclick = open;
+    row.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } };
     rows.push(row);
-    if (isOpen) {
-      const detail = el("div", { className:"event-detail-grid" });
-      const items = [
-        ["Severity", severity.toUpperCase()], ["Recorded", new Date(e.at).toISOString()],
-        ["Event code", e.kind], ["Agent instance", `${e.agent} · pid ${e.pid}`],
-        ["Evidence", e.evidence ?? "persistent local event journal"], ["Detail", e.detail],
-      ];
-      for (const [label,value] of items) detail.append(el("div", { className:"event-detail-item" }, [el("b", { textContent:label }), el("span", { className:label==="Event code"?"mono":"", textContent:value })]));
-      rows.push(el("tr", { className:"event-detail-row" }, el("td", { colSpan:5 }, detail)));
-    }
   }
   out.append(makeTable("events", [
     { key:"at", label:"When", sortable:true }, { key:"kind", label:"Event", sortable:true }, { key:"agent", label:"Agent", sortable:true }, { key:"pid", label:"PID", align:"right", sortable:true }, { key:"detail", label:"Detail", sortable:true },

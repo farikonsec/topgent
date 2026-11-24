@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Topgent">
+  <title>Topgent</title>
+  <!--
+    A process table with one row lit.
+
+    Four bars of a monitor's list, the second one red because it is the worst
+    thing running. That is the whole product in one picture: a list of agents,
+    ordered, with the one that matters marked. Nothing decorative, and it still
+    reads at 16 pixels because the bars stay separate at that size.
+  -->
+  <rect width="256" height="256" rx="52" fill="#14161a"/>
+  <rect x="52" y="66"  width="152" height="20" rx="10" fill="#4d5560"/>
+  <rect x="52" y="104" width="152" height="20" rx="10" fill="#e2625c"/>
+  <rect x="52" y="142" width="112" height="20" rx="10" fill="#4d5560"/>
+  <rect x="52" y="180" width="76"  height="20" rx="10" fill="#3a4049"/>
+</svg>

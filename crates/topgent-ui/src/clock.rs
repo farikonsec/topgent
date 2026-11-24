@@ -24,6 +24,21 @@ pub fn stamp(at_ms: u64) -> String {
     }
 }
 
+/// Local `(year, month, day, hour, minute, second)` for a stamp.
+#[must_use]
+pub fn local_parts(at_ms: u64) -> (i64, u32, u32, u64, u64, u64) {
+    let (days, seconds) = split(at_ms);
+    let (year, month, day) = civil(days);
+    (
+        year,
+        month,
+        day,
+        seconds / 3600,
+        (seconds % 3600) / 60,
+        seconds % 60,
+    )
+}
+
 /// Whole days since the epoch, and seconds into the local day.
 fn split(at_ms: u64) -> (i64, u64) {
     let local = i64::try_from(at_ms / 1000).unwrap_or(0) + offset_seconds();
@@ -31,7 +46,9 @@ fn split(at_ms: u64) -> (i64, u64) {
     (local / 86_400, u64::try_from(local % 86_400).unwrap_or(0))
 }
 
-fn now_ms() -> u64 {
+/// Now, in Unix milliseconds.
+#[must_use]
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))

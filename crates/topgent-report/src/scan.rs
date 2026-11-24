@@ -65,6 +65,9 @@ pub fn now_ms() -> u64 {
 fn report_collectors(policy: &Policy) -> Vec<Box<dyn Collector>> {
     vec![
         Box::new(process::ProcessCollector::default()),
+        // Beside the sweep's own walk: the kernel's account of every process
+        // that started and ended between two sweeps.
+        Box::new(topgent_collect::process_events::ProcessEventCollector),
         Box::new(topgent_collect::editor::EditorExtensionCollector),
         Box::new(filesystem::FilesystemEventCollector::default()),
         Box::new(network_event::NetworkEventCollector::default()),
@@ -148,6 +151,134 @@ pub fn observe() -> Observed {
     }
 }
 
+/// The workspace-exfiltration incidents after this sweep, saved.
+/// Every incident: workspace exfiltration from the counters, and the named
+/// behaviour incidents derived from this sweep's retained findings. Newest
+/// first.
+fn all_incidents(
+    exfiltration: &Value,
+    behaviour: &Value,
+    processes: &Value,
+    live: &[topgent_core::graph::Agent],
+    ended: &[Value],
+) -> Value {
+    let family_of = |pid: u32, started: u64| -> Option<String> {
+        live.iter()
+            .find(|a| a.id.pid == pid && a.id.started_at.0 == started)
+            .and_then(|a| a.family.clone())
+            .or_else(|| {
+                ended
+                    .iter()
+                    .find(|r| {
+                        r.get("pid").and_then(Value::as_u64) == Some(u64::from(pid))
+                            && r.get("started_at").and_then(Value::as_u64) == Some(started)
+                    })
+                    .and_then(|r| r.get("family")?.as_str().map(str::to_owned))
+            })
+    };
+    let findings: Vec<Value> = behaviour
+        .get("rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut rows: Vec<Value> = exfiltration
+        .get("rows")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    rows.extend(crate::rule_incidents::derive(&findings, &family_of));
+    let processes: Vec<Value> = processes.as_array().cloned().unwrap_or_default();
+    let is_tool = |name: &str| {
+        topgent_policy::signals::builtin().is_ok_and(|signals| signals.is_offensive_tool(name))
+    };
+    let agent = |pid: u32, started: u64| {
+        let family = family_of(pid, started);
+        let name = family
+            .as_deref()
+            .map_or_else(|| format!("PID {pid}"), crate::tool_incidents::product_name);
+        (name, family)
+    };
+    rows.extend(crate::tool_incidents::derive(&processes, &is_tool, &agent));
+    rows.sort_by_key(|r| {
+        std::cmp::Reverse(r.get("first_seen").and_then(Value::as_u64).unwrap_or(0))
+    });
+    Value::Array(rows)
+}
+
+fn incidents_for(
+    journal: &Journal,
+    journal_error: &mut Option<String>,
+    result: &topgent_collect::Sweep,
+    lineage: &topgent_core::lineage::Lineage,
+    live: &[topgent_core::graph::Agent],
+    ended: &[Value],
+    boot: &str,
+) -> Value {
+    let catalogue = topgent_collect::signatures::builtin().ok();
+    let display = |family: Option<&str>, exe: Option<&str>| -> String {
+        family
+            .and_then(|id| catalogue?.families.iter().find(|f| f.id == id))
+            .map(|f| f.name.clone())
+            .or_else(|| exe.map(|e| e.rsplit(['/', '\\']).next().unwrap_or(e).to_owned()))
+            .unwrap_or_else(|| "an agent".to_owned())
+    };
+    let mut agents = std::collections::BTreeMap::new();
+    for agent in live {
+        agents.insert(
+            topgent_core::lineage::ProcessKey {
+                pid: agent.id.pid,
+                started_at: agent.id.started_at,
+            },
+            (
+                display(agent.family.as_deref(), agent.exe.as_deref()),
+                agent.family.clone(),
+            ),
+        );
+    }
+    for row in ended {
+        let (Some(pid), Some(started_at)) = (
+            row.get("pid")
+                .and_then(Value::as_u64)
+                .and_then(|p| u32::try_from(p).ok()),
+            row.get("started_at").and_then(Value::as_u64),
+        ) else {
+            continue;
+        };
+        let family = row.get("family").and_then(Value::as_str);
+        agents
+            .entry(topgent_core::lineage::ProcessKey {
+                pid,
+                started_at: topgent_facts::UnixMillis(started_at),
+            })
+            .or_insert_with(|| {
+                (
+                    display(family, row.get("exe").and_then(Value::as_str)),
+                    family.map(str::to_owned),
+                )
+            });
+    }
+    let saved = journal.incident_history().unwrap_or_else(|e| {
+        *journal_error = Some(e.to_string());
+        json!({})
+    });
+    let history = crate::incidents::project(
+        &saved,
+        &result.totals,
+        lineage,
+        &agents,
+        &mut crate::incidents::Live,
+        &|actors| topgent_collect::observed::tally::tools_for(actors),
+        &crate::honeytoken::Manifest::load(),
+        boot,
+    );
+    if history != saved
+        && let Err(e) = journal.save_incident_history(&history)
+    {
+        *journal_error = Some(e.to_string());
+    }
+    history
+}
+
 /// Projects one sweep into the report every front end reads.
 #[must_use]
 // One `json!` expression naming every section of the report. Splitting it would
@@ -165,12 +296,70 @@ pub fn report_from_sweep(
         .iter()
         .map(|(agent, _)| agent.clone())
         .collect::<Vec<_>>();
+    let journal = Journal::open_default();
+    let mut journal_error: Option<String> = None;
+    let mut lineage = journal.process_history().unwrap_or_else(|error| {
+        journal_error = Some(error.to_string());
+        topgent_core::lineage::Lineage::new(topgent_journal::process_history::MAX_PROCESS_HISTORY)
+    });
+    crate::lineage::record(
+        &mut lineage,
+        &result.processes,
+        &result.process_events,
+        &inventory_agents,
+        generated_at,
+    );
+    let keys = inventory_agents
+        .iter()
+        .map(|a| topgent_core::lineage::ProcessKey {
+            pid: a.id.pid,
+            started_at: a.id.started_at,
+        })
+        .collect::<Vec<_>>();
+    let prior_actions = journal.action_history().unwrap_or_else(|e| {
+        journal_error = Some(e.to_string());
+        json!({})
+    });
+    let boot = std::fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap_or_default();
+    let action_history = crate::observed::project(
+        prior_actions,
+        &result.observed_actions,
+        &mut lineage,
+        &keys,
+        boot.trim(),
+    );
+    if let Err(e) = journal.save_action_history(&action_history) {
+        journal_error = Some(e.to_string());
+    }
+    let prior_findings = journal.behaviour_history().unwrap_or_else(|e| {
+        journal_error = Some(e.to_string());
+        json!({})
+    });
+    let mut behaviour_findings = crate::behaviour::evaluate_sweep(result, &lineage);
+    behaviour_findings.extend(crate::behaviour::temporal::correlate(
+        &action_history,
+        &policy.sensitive,
+        std::env::var("HOME").ok().as_deref(),
+    ));
+    let behaviour_history = crate::behaviour::findings::project(
+        &prior_findings,
+        behaviour_findings,
+        &lineage,
+        &keys,
+        boot.trim(),
+    );
+    if let Err(e) = journal.save_behaviour_history(&behaviour_history) {
+        journal_error = Some(e.to_string());
+    }
+    let mut enriched_facts = result.facts.clone();
+    enriched_facts.extend(crate::observed::file_facts(&action_history, &keys));
+    let scored = analyse_with(&enriched_facts, &policy);
+    let inventory_agents = scored.iter().map(|(a, _)| a.clone()).collect::<Vec<_>>();
     let installed_assets =
         AssetInventoryCollector::default().collect(topgent_facts::UnixMillis(generated_at));
     let inventory = build_inventory_with_installed(&inventory_agents, &policy, &installed_assets);
     let current_activity = build_activity(&result.facts, &inventory_agents);
 
-    let journal = Journal::open_default();
     let activity = persisted_activity(&journal, &current_activity, generated_at);
     let previous_network = journal.network_history().unwrap_or_default();
     let network = merge_network_history(
@@ -180,7 +369,9 @@ pub fn report_from_sweep(
         MAX_NETWORK_RECORDS,
     );
     let network_baselines = build_network_baselines(&network, generated_at);
-    let mut journal_error: Option<String> = None;
+    if let Err(e) = journal.save_process_history(&lineage) {
+        journal_error = Some(e.to_string());
+    }
     if let Err(e) = journal.advance_sweep(&scored, now_ms()) {
         journal_error = Some(e.to_string());
     }
@@ -197,7 +388,50 @@ pub fn report_from_sweep(
         .iter()
         .map(event_json)
         .collect::<Vec<_>>();
-    json!({
+    let mut agent_rows: Vec<Value> = scored
+        .iter()
+        .map(|agent| {
+            let mut row = agent_json(agent, &policy, generated_at);
+            if let (Some(fields), Some(id)) = (
+                row.as_object_mut(),
+                crate::agents::live_container(&agent.0, &result.processes),
+            ) {
+                fields.insert("container".to_owned(), crate::agents::container_json(&id));
+            }
+            row
+        })
+        .collect();
+    let ended = crate::agent_history::track(&mut agent_rows, generated_at);
+    let ended_roots: Vec<topgent_core::lineage::ProcessKey> = ended
+        .agents
+        .iter()
+        .filter_map(|row| {
+            Some(topgent_core::lineage::ProcessKey {
+                pid: u32::try_from(row.get("pid")?.as_u64()?).ok()?,
+                started_at: topgent_facts::UnixMillis(row.get("started_at")?.as_u64()?),
+            })
+        })
+        .collect();
+    let incident_history = incidents_for(
+        &journal,
+        &mut journal_error,
+        result,
+        &lineage,
+        &inventory_agents,
+        &ended.agents,
+        boot.trim(),
+    );
+    let behaviour_catalogue = crate::behaviour::catalogue_json();
+    let incident_kinds = crate::rule_incidents::kinds_json(&behaviour_catalogue);
+    let process_history = crate::lineage::history_json(&lineage, &inventory_agents, &ended_roots);
+    let incidents = all_incidents(
+        &incident_history,
+        &behaviour_history,
+        &process_history,
+        &inventory_agents,
+        &ended.agents,
+    );
+    let mut report = json!({
         "contract_version": topgent_export::REPORT_CONTRACT_VERSION,
         "version": version(),
         "generated_at": generated_at,
@@ -208,7 +442,13 @@ pub fn report_from_sweep(
             .iter()
             .map(|(c, e)| json!({ "collector": c, "reason": e.to_string() }))
             .collect::<Vec<_>>(),
-        "platform": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH },
+        "platform": {
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            // The system's own name for itself, for the top of each interface.
+            "name": crate::health::os_name(),
+        },
+        "deployment": crate::health::deployment(),
         "sensors": sensor_health(&result.runs, generated_at, &journal),
         "tools": tool_attestations(generated_at, &journal),
         "interception": {
@@ -251,7 +491,11 @@ pub fn report_from_sweep(
         },
         "response": response_json(&inventory_agents, &policy, &journal, generated_at),
         "context": context_json(policy.semantic.enabled, &journal, &inventory_agents, generated_at),
-        "agents": scored.iter().map(|agent| agent_json(agent, &policy, generated_at)).collect::<Vec<_>>(),
+        "agents": agent_rows,
+        // Agents seen earlier in this session and not running now, each as
+        // it was last seen (see `agent_history`).
+        "ended_agents": ended.agents,
+        "ended_agents_evicted": ended.evicted,
         "assets": inventory.assets.iter().map(|asset| json!({
             "id": asset.id.0,
             "kind": asset.kind.as_str(),
@@ -287,6 +531,21 @@ pub fn report_from_sweep(
             "redaction": "secrets, prompt content, file content, credential content, and TLS payloads excluded",
         },
         "activity": activity_json(&activity, &inventory_agents),
+        "process_history": process_history,
+        "observed_actions": action_history.get("rows"),
+        "action_coverage": crate::observed::coverage_json(&action_history, result.observed_overflow),
+        // The plain-language incidents, newest first, and whether this host
+        // can observe what they need.
+        "incidents": incidents,
+        "incident_coverage": crate::incidents::coverage(topgent_collect::observed::sensor_delivers()),
+        "agent_flows": incident_history.get("flows"),
+        "behaviour": {
+            "catalogue": behaviour_catalogue,
+            "findings": behaviour_history.get("rows"),
+            "evicted": behaviour_history.get("evicted"),
+            "syscall_events": result.syscall_events.len(),
+            "syscall_queue_losses": result.syscall_overflow,
+        },
         "network": network_json(&network, &network_baselines, &inventory_agents, generated_at, &policy),
         "network_baselines": baseline_json(&network_baselines),
         "events": events,
@@ -298,7 +557,12 @@ pub fn report_from_sweep(
             "severity": match r.severity { topgent_policy::Severity::Critical => "Critical".to_owned(), topgent_policy::Severity::Points(p) => format!("+{p}") },
             "response": r.response.as_str(),
         })).collect::<Vec<_>>(),
-    })
+    });
+    // Outside the literal: one more key there passes the macro's recursion limit.
+    if let Some(object) = report.as_object_mut() {
+        object.insert("incident_kinds".into(), incident_kinds);
+    }
+    report
 }
 
 /// Export a fresh scan as a `CycloneDX` 1.6 AI-BOM.

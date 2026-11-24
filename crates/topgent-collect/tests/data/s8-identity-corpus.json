@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "corpus_id": "s8-identity-v1",
+  "frozen_at": "2026-09-24",
+  "cases": [
+    {"id":"train-claude-install","partition":"training","environment":"agent-installs","executable":"/usr/lib/node_modules/@anthropic-ai/claude-code/claude","expected_class":"known","expected_family":"claude-code"},
+    {"id":"train-claude-portable","partition":"training","environment":"agent-installs","executable":"/tmp/claude","expected_class":"suspected","expected_family":"claude-code"},
+    {"id":"train-codex-install","partition":"training","environment":"agent-installs","executable":"/home/lab/.local/lib/node_modules/@openai/codex/bin/codex.js","expected_class":"known","expected_family":"codex-cli"},
+    {"id":"train-codex-decoy","partition":"training","environment":"same-name-decoys","executable":"/tmp/codex","expected_class":"unknown","expected_family":null},
+    {"id":"train-gemini-install","partition":"training","environment":"agent-installs","executable":"/home/lab/.npm-global/lib/node_modules/@google/gemini-cli/gemini.js","expected_class":"known","expected_family":"gemini-cli"},
+    {"id":"train-gemini-decoy","partition":"training","environment":"same-name-decoys","executable":"/tmp/gemini.js","expected_class":"unknown","expected_family":null},
+    {"id":"train-opencode-install","partition":"training","environment":"agent-installs","executable":"/home/lab/.npm-global/lib/node_modules/opencode-ai/bin/opencode","expected_class":"known","expected_family":"opencode"},
+    {"id":"train-opencode-decoy","partition":"training","environment":"same-name-decoys","executable":"/tmp/opencode","expected_class":"unknown","expected_family":null},
+    {"id":"train-cursor-install","partition":"training","environment":"agent-installs","executable":"/home/lab/Applications/cursor.AppImage","expected_class":"known","expected_family":"cursor"},
+    {"id":"train-cursor-system-helper","partition":"training","environment":"same-name-decoys","executable":"/System/Library/CursorUIViewService","expected_class":"unknown","expected_family":null},
+    {"id":"train-ollama-install","partition":"training","environment":"model-runtimes","executable":"/usr/local/bin/ollama","expected_class":"known","expected_family":"ollama"},
+    {"id":"train-ollama-portable","partition":"training","environment":"model-runtimes","executable":"/tmp/ollama","expected_class":"suspected","expected_family":"ollama"},
+    {"id":"train-lmstudio-portable","partition":"training","environment":"model-runtimes","executable":"/tmp/lmstudio","expected_class":"suspected","expected_family":"lm-studio"},
+    {"id":"train-windsurf-install","partition":"training","environment":"agent-installs","executable":"/usr/share/windsurf/windsurf","expected_class":"known","expected_family":"windsurf"},
+    {"id":"train-shell","partition":"training","environment":"developer-cli","executable":"/usr/bin/bash","expected_class":"unknown","expected_family":null},
+    {"id":"train-node","partition":"training","environment":"developer-cli","executable":"/usr/bin/node","expected_class":"unknown","expected_family":null},
+    {"id":"train-python","partition":"training","environment":"developer-cli","executable":"/usr/bin/python3","expected_class":"unknown","expected_family":null},
+    {"id":"train-docker","partition":"training","environment":"developer-cli","executable":"/usr/bin/docker","expected_class":"unknown","expected_family":null},
+
+    {"id":"holdout-qwen-install","partition":"held_out","environment":"held-out-qwen-family","executable":"/home/lab/.npm-global/lib/node_modules/@qwen-code/qwen-code/cli-entry.js","expected_class":"known","expected_family":"qwen-code"},
+    {"id":"holdout-qwen-decoy","partition":"held_out","environment":"held-out-qwen-family","executable":"/tmp/cli-entry.js","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-kimi-install","partition":"held_out","environment":"held-out-kimi-family","executable":"/home/lab/.kimi-code/bin/kimi","expected_class":"known","expected_family":"kimi-code"},
+    {"id":"holdout-kimi-decoy","partition":"held_out","environment":"held-out-kimi-family","executable":"/tmp/kimi","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-rust-cargo","partition":"held_out","environment":"held-out-rust-workspace","executable":"/home/lab/.rustup/toolchains/stable-aarch64-unknown-linux-gnu/bin/cargo","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-rust-rustc","partition":"held_out","environment":"held-out-rust-workspace","executable":"/home/lab/.rustup/toolchains/stable-aarch64-unknown-linux-gnu/bin/rustc","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-rust-sccache","partition":"held_out","environment":"held-out-rust-workspace","executable":"/usr/local/bin/sccache","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-rust-git","partition":"held_out","environment":"held-out-rust-workspace","executable":"/usr/bin/git","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-rust-ld","partition":"held_out","environment":"held-out-rust-workspace","executable":"/usr/bin/ld","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-rust-pkg-config","partition":"held_out","environment":"held-out-rust-workspace","executable":"/usr/bin/pkg-config","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-devserver","partition":"held_out","environment":"held-out-web-workspace","executable":"/usr/bin/python3","expected_class":"unknown","expected_family":null},
+    {"id":"holdout-provider-client","partition":"held_out","environment":"held-out-web-workspace","executable":"/usr/bin/curl","expected_class":"unknown","expected_family":null}
+  ]
+}

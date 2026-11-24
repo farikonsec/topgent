@@ -28,7 +28,10 @@ pub use launcher::{SCRIPT_RUNTIMES, is_script_runtime, parse_windows_launchers};
 #[cfg(any(windows, test))]
 pub use owner::valid_windows_sid;
 pub use owner::{Owner, current_owner, owned_by, owner_of, with_resolved_owner};
-pub use table::{ProcInfo, family_of, snapshot};
+pub(crate) use table::within_sweep;
+pub use table::{ProcInfo, family_of, snapshot, walks};
+#[cfg(target_os = "linux")]
+pub use table::{boot_seconds, kernel_start, start_from_event};
 
 /// Maps every process to the nearest recognised agent above it.
 ///

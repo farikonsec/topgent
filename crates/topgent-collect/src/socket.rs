@@ -26,6 +26,7 @@
 //! | [`windows`] | `Get-NetTCPConnection` for connection age, `netstat` as the fallback. |
 //! | [`collector`] | Running the right tool, and attributing each socket to an agent. |
 
+mod accepted;
 mod collector;
 mod linux;
 mod macos;

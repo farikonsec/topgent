@@ -1,0 +1,96 @@
+{
+  "schema_version": 1,
+  "corpus_id": "s8-temporal-v1",
+  "cases": [
+    {
+      "id": "credential-then-non-loopback",
+      "environment": "positive-control",
+      "expected_findings": 1,
+      "rows": [
+        {"record":"p2","action":"connect","result":"connected","target":"203.0.113.9:443","at":1500,"actor_pid":102,"actor_name":"curl","agent_pid":10,"agent_started_at":50},
+        {"record":"p1","action":"read","result":"succeeded","target":"/home/test/.aws/credentials","at":1000,"actor_pid":101,"actor_name":"cat","agent_pid":10,"agent_started_at":50}
+      ]
+    },
+    {
+      "id": "package-install",
+      "environment": "package-installation",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"npm2","action":"connect","result":"connected","target":"104.16.24.34:443","at":1500,"actor_pid":202,"actor_name":"npm","agent_pid":20,"agent_started_at":60},
+        {"record":"npm1","action":"read","result":"succeeded","target":"/home/test/project/package.json","at":1000,"actor_pid":201,"actor_name":"node","agent_pid":20,"agent_started_at":60}
+      ]
+    },
+    {
+      "id": "local-development-server",
+      "environment": "local-dev-server",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"dev2","action":"connect","result":"connected","target":"127.0.0.1:3000","at":1500,"actor_pid":302,"actor_name":"browser","agent_pid":30,"agent_started_at":70},
+        {"record":"dev1","action":"read","result":"succeeded","target":"/home/test/.aws/credentials","at":1000,"actor_pid":301,"actor_name":"devserver","agent_pid":30,"agent_started_at":70}
+      ]
+    },
+    {
+      "id": "repository-scan",
+      "environment": "repository-scan",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"scan2","action":"connect","result":"connected","target":"203.0.113.10:443","at":1500,"actor_pid":402,"actor_name":"agent","agent_pid":40,"agent_started_at":80},
+        {"record":"scan1","action":"read","result":"succeeded","target":"/home/test/project/src/main.rs","at":1000,"actor_pid":401,"actor_name":"rg","agent_pid":40,"agent_started_at":80}
+      ]
+    },
+    {
+      "id": "loopback-client",
+      "environment": "loopback-client",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"loop2","action":"send","result":"connected","target":"[::1]:8080","at":1500,"actor_pid":352,"actor_name":"curl","agent_pid":35,"agent_started_at":75},
+        {"record":"loop1","action":"read","result":"succeeded","target":"/home/test/.aws/credentials","at":1000,"actor_pid":351,"actor_name":"cat","agent_pid":35,"agent_started_at":75}
+      ]
+    },
+    {
+      "id": "shell-build-tools",
+      "environment": "shell-and-build",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"build2","action":"write","result":"succeeded","target":"/home/test/project/target/app","at":1500,"actor_pid":502,"actor_name":"rustc","agent_pid":50,"agent_started_at":90},
+        {"record":"build1","action":"read","result":"succeeded","target":"/home/test/project/Cargo.toml","at":1000,"actor_pid":501,"actor_name":"cargo","agent_pid":50,"agent_started_at":90}
+      ]
+    },
+    {
+      "id": "model-provider-traffic",
+      "environment": "model-provider-traffic",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"llm1","action":"connect","result":"connected","target":"203.0.113.11:443","at":1500,"actor_pid":601,"actor_name":"agent","agent_pid":60,"agent_started_at":100}
+      ]
+    },
+    {
+      "id": "pid-reuse",
+      "environment": "identity-control",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"reuse2","action":"connect","result":"connected","target":"203.0.113.12:443","at":1500,"actor_pid":702,"actor_name":"curl","agent_pid":70,"agent_started_at":200},
+        {"record":"reuse1","action":"read","result":"succeeded","target":"/home/test/.aws/credentials","at":1000,"actor_pid":701,"actor_name":"cat","agent_pid":70,"agent_started_at":100}
+      ]
+    },
+    {
+      "id": "expired-window",
+      "environment": "window-control",
+      "expected_findings": 0,
+      "rows": [
+        {"record":"late2","action":"connect","result":"connected","target":"203.0.113.13:443","at":62001,"actor_pid":802,"actor_name":"curl","agent_pid":80,"agent_started_at":110},
+        {"record":"late1","action":"read","result":"succeeded","target":"/home/test/.aws/credentials","at":1000,"actor_pid":801,"actor_name":"cat","agent_pid":80,"agent_started_at":110}
+      ]
+    },
+    {
+      "id": "multiple-reads-one-connection",
+      "environment": "deduplication-control",
+      "expected_findings": 1,
+      "rows": [
+        {"record":"multi3","action":"connect","result":"in_progress","target":"203.0.113.14:443","at":1500,"actor_pid":902,"actor_name":"curl","agent_pid":90,"agent_started_at":120},
+        {"record":"multi1","action":"read","result":"succeeded","target":"/home/test/.aws/credentials","at":1000,"actor_pid":901,"actor_name":"cat","agent_pid":90,"agent_started_at":120},
+        {"record":"multi2","action":"read","result":"succeeded","target":"/home/test/.aws/credentials","at":1400,"actor_pid":901,"actor_name":"cat","agent_pid":90,"agent_started_at":120}
+      ]
+    }
+  ]
+}

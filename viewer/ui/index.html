@@ -5,175 +5,95 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Topgent</title>
 <meta name="topgent-token" content="__TOPGENT_TOKEN__">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap">
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="simple.css">
 </head>
 <body>
+<!-- The simple view: the default. Running agents first, risks in plain
+     words, and everything technical one click away (simple.mjs). -->
+<div id="simple" class="simple">
+  <aside class="s-side" aria-label="Topgent">
+    <div class="s-brand"><img src="icon.svg" width="26" height="26" alt=""><strong>Topgent</strong></div>
+    <nav id="simpleNav" class="s-nav"></nav>
+    <div class="s-side-foot">
+      <button id="simpleTechnical" class="s-link" type="button">Advanced view →</button>
+      <span>Data stays on this host.</span>
+    </div>
+  </aside>
+  <main class="s-main">
+    <div class="s-top"><h1 id="simpleTitle">Agents</h1><span id="simpleLive" class="s-live"><i></i>Live</span></div>
+    <div id="simpleBody"></div>
+  </main>
+</div>
+
+<div id="technical" hidden>
 <header>
-  <span class="brand">
-    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4v6a10 10 0 0 0 10 10h6"/><circle cx="17.5" cy="6.5" r="3"/></svg>
-    Topgent
-  </span>
   <span class="live"><i id="beat"></i><span id="host">Live</span></span>
   <span class="mono faint" id="meta"></span>
-  <span style="flex:1 1 auto"></span>
-  <button id="themeBtn" class="btn quiet" type="button" aria-pressed="false">☀ Bright mode</button>
-  <button id="ciBtn" class="btn quiet" title="How to run Topgent policy checks in CI">8 · CI policy</button>
-  <button id="legendBtn" class="btn quiet">Rules &amp; legend</button>
-  <button id="soundBtn" class="btn quiet" title="Alerts: sound, toast and system notification. The event log keeps every finding either way.">🔔 On</button>
+  <!-- The host's system, beside the host rather than at the far right,
+       where a narrow window cuts it off (as on the desktop). -->
+  <span class="mono muted" id="system"></span>
+  <span class="spacer"></span>
+  <button id="simpleBack" class="btn quiet">← Overview</button>
   <button id="reset" class="btn quiet">Reset view</button>
   <button id="pause" class="btn">Pause</button>
 </header>
 
-<section class="threat-rail" aria-label="Current threat posture">
-  <div class="rail-cell"><div class="rail-label">Posture</div><div class="rail-value small" id="posture">Collecting evidence…</div><div class="rail-note" id="postureNote">Metadata only · no traffic decryption</div></div>
-  <div class="rail-cell"><div class="rail-label">Critical agents</div><div class="rail-value" id="railCritical">0</div><div class="rail-note">Require immediate review</div></div>
-  <div class="rail-cell"><div class="rail-label">Rogue signals</div><div class="rail-value" id="railSignals">0</div><div class="rail-note">Active behavioural factors</div></div>
-  <div class="rail-cell"><div class="rail-label">Agents detected</div><div class="rail-value" id="railEstate">0</div><div class="rail-note" id="railEstateNote">0 evidence points</div></div>
-</section>
-
 <div class="workspace">
-<main>
-  <!-- agents -->
-  <div class="panel" id="panel-agents" data-view="agents">
-    <div class="head">
-      <h2>Agents</h2>
-      <span class="count" id="agentCount"></span>
-      <span class="spacer"></span>
-      <div class="toolbar">
-        <div class="export-control" role="group" aria-label="Export AI-BOM">
-          <span class="export-label"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M5 19h14"/></svg>AI-BOM</span>
-          <button class="btn primary" id="exportAibomHtml" title="Download a self-contained, human-readable AI inventory">HTML report</button>
-          <button class="btn" id="exportAibomJson" title="Download the machine-readable CycloneDX 1.6 document">JSON</button>
-        </div>
-        <span class="fchip" data-risk="all" aria-pressed="true">All</span>
-        <span class="fchip" data-risk="CRITICAL">Critical<span class="n" id="nCrit">0</span></span>
-        <span class="fchip" data-risk="HIGH">High<span class="n" id="nHigh">0</span></span>
-        <span class="fchip" data-risk="MEDIUM">Medium<span class="n" id="nMed">0</span></span>
-        <span class="fchip" data-risk="LOW">Low<span class="n" id="nLow">0</span></span>
-        <label class="search">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
-          <input id="agentSearch" placeholder="Search agents, model, PID…" autocomplete="off">
-        </label>
-      </div>
-    </div>
-    <div class="body resizable" id="agentsBody" style="max-height:46vh"></div>
-  </div>
-
-  <!-- risk + blast radius -->
-  <div class="cols2" data-panel-group>
-    <div class="panel" id="panel-risk" data-view="risk" hidden>
-      <div class="head"><h2 id="riskTitle">Risk</h2><span class="count" id="riskSub"></span></div>
-      <div class="body resizable" id="risk" style="min-height:220px"></div>
-    </div>
-    <div class="panel" id="panel-blast" data-view="blast" hidden>
-      <div class="head"><h2>Blast radius</h2><span class="count" id="blastSub"></span></div>
-      <div class="body resizable" id="blast" style="min-height:220px"></div>
-    </div>
-  </div>
-
-  <!-- access + events -->
-  <div class="cols2" data-panel-group>
-    <div class="panel" id="panel-access" data-view="access" hidden>
-      <div class="head"><h2>Access</h2><span class="count">declared · observed · reachable</span></div>
-      <div class="body resizable" id="access" style="min-height:200px"></div>
-    </div>
-    <div class="panel" id="panel-events" data-view="events" hidden>
-      <div class="head">
-        <h2>Event log</h2>
-        <span class="count" id="eventCount"></span>
-        <span class="spacer"></span>
-        <div class="toolbar">
-          <select id="eventKind" class="btn quiet" style="height:28px">
-            <option value="all">All events</option>
-            <option value="started">Started</option>
-            <option value="stopped">Stopped</option>
-            <option value="grade_changed">Risk changed</option>
-            <option value="credential_exposed">Credential exposed</option>
-            <option value="policy_breach">Out of policy</option>
-            <option value="recon">Scanning</option>
-            <option value="behaviour">Rogue behaviour</option>
-            <option value="model_drift">Model drift</option>
-            <option value="action">Action</option>
-          </select>
-          <label class="search">
-            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
-            <input id="eventSearch" placeholder="Search events…" autocomplete="off">
-          </label>
-        </div>
-      </div>
-      <div class="body resizable" id="events" style="min-height:200px"></div>
-    </div>
-  </div>
-
-  <!-- current evidence projection; separate from the persisted cross-sweep event log -->
-  <div class="panel" id="panel-activity" data-view="activity" hidden>
-    <div class="head"><h2>Activity path</h2><span class="count" id="activityCount"></span></div>
-    <div class="body resizable" id="activity" style="min-height:220px"></div>
-  </div>
-
-  <div class="panel" id="panel-network" data-view="network" hidden>
-    <div class="head">
-      <h2>Network activity</h2><span class="count" id="networkCount"></span><span class="spacer"></span>
-      <div class="toolbar">
-        <button class="btn quiet" id="networkBaselineReset" disabled title="Select an agent with retained network history">↻ Reset selected baseline</button>
-        <select id="networkDirection" class="btn quiet" style="height:28px">
-          <option value="all">All directions</option><option value="outbound">Outbound</option><option value="listening">Listening</option>
-        </select>
-        <label class="search"><input id="networkSearch" placeholder="Search host, port, verdict…" autocomplete="off"></label>
-      </div>
-    </div>
-    <div class="body resizable" id="network" style="min-height:220px"></div>
-  </div>
-
-  <div class="panel" id="panel-health" data-view="health" hidden>
-    <div class="head"><h2>Sensor health &amp; detection coverage</h2><span class="count" id="healthCount"></span></div>
-    <div class="body resizable" id="health" style="min-height:260px"></div>
-  </div>
-
-  <div class="panel" id="panel-response" data-view="response" hidden>
-    <div class="head"><h2>Response &amp; governance queue</h2><span class="count" id="responseCount"></span></div>
-    <div class="body resizable" id="response" style="min-height:220px"></div>
-  </div>
-
-  <div class="panel" id="panel-context" data-view="context" hidden>
-    <div class="head">
-      <h2>Optional session context</h2><span class="count" id="contextCount"></span><span class="spacer"></span>
-      <button class="btn quiet" id="contextToggle">Enable context</button>
-      <button class="btn quiet" id="contextClear">Delete retained context</button>
-    </div>
-    <div class="body resizable" id="context" style="min-height:220px"></div>
-  </div>
-
-  <!-- the same typed inventory later exported as CycloneDX -->
-  <div class="panel" id="panel-assets" data-view="assets" hidden>
-    <div class="head">
-      <h2>Agents &amp; assets</h2>
-      <span class="count" id="assetCount"></span>
-      <span class="spacer"></span>
-      <div class="toolbar">
-        <select id="assetKind" class="btn quiet" style="height:28px">
-          <option value="all">All asset types</option>
-          <option value="agent">Agents</option>
-          <option value="model">Models</option>
-          <option value="connector">Connectors</option>
-          <option value="endpoint">Endpoints</option>
-          <option value="tool">Tools</option>
-        </select>
-        <label class="search">
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.6-3.6"/></svg>
-          <input id="assetSearch" placeholder="Search assets…" autocomplete="off">
-        </label>
-      </div>
-    </div>
-    <div class="body resizable" id="assets" style="min-height:220px"></div>
-  </div>
-</main>
-<aside class="view-nav" aria-label="Dashboard views">
-  <div class="view-nav-head"><strong>Inspect</strong></div>
-  <div class="view-nav-actions"><button class="btn quiet" id="openAllViews">Open all</button><button class="btn quiet" id="closeAllViews">Close all</button></div>
-  <nav class="view-nav-list" id="viewNav"></nav>
+<aside class="view-nav" aria-label="Topgent workspaces">
+  <div class="sidebar-brand"><div class="brand-lockup"><img src="icon.svg" width="30" height="30" alt=""><strong><span>top</span><span>gent</span></strong></div><span>Agent monitoring</span></div>
+  <label class="mobile-workspace-picker" for="mobileWorkspace"><span>Workspace</span><select id="mobileWorkspace" aria-label="Workspace"></select></label>
+  <div class="nav-section"><span>Observe</span><nav class="view-nav-list" id="observeNav"></nav></div>
+  <div class="nav-section"><span>Manage</span><nav class="view-nav-list" id="manageNav"></nav></div>
+  <div class="sidebar-foot"><strong>Local only</strong><span>Data stays on this host.</span></div>
 </aside>
+<main>
+  <div class="workspace-heading"><div><h1 id="workspaceTitle">Agents</h1><p id="workspaceDescription">Running and stopped agents.</p></div><div class="workspace-actions"><button id="ciBtn" class="btn quiet" title="How to run Topgent policy checks in CI">CI policy</button><button id="legendBtn" class="btn quiet">Rules &amp; legend</button><button id="soundBtn" class="btn quiet" title="Alerts: sound, toast and system notification. The event log keeps every finding either way.">🔔 On</button></div></div>
+
+  <!-- The desktop's four figures (shell.rs, metrics), each a way in. -->
+  <section class="threat-rail" aria-label="Whether this host needs attention">
+    <button class="rail-cell" data-go="agents"><div class="rail-value" id="metricAgents">0</div><div class="rail-label">Running agents</div><div class="rail-note">On this host</div></button>
+    <button class="rail-cell" data-go="agents"><div class="rail-value" id="metricCritical">0</div><div class="rail-label">Critical risk</div><div class="rail-note">Review now</div></button>
+    <button class="rail-cell" data-go="network"><div class="rail-value" id="metricEndpoints">0</div><div class="rail-label">Network endpoints</div><div class="rail-note">Connections and listeners</div></button>
+    <button class="rail-cell" data-go="coverage"><div class="rail-value" id="metricReads">0</div><div class="rail-label">Credential reads</div><div class="rail-note">Observed</div></button>
+    <button class="rail-cell" data-go="incidents"><div class="rail-value" id="metricIncidents">0</div><div class="rail-label">Incidents</div><div class="rail-note" id="metricIncidentsNote">Open</div></button>
+  </section>
+
+  <section id="page-incidents" data-workspace-page="incidents"><div class="panel"><div class="head"><h2>Incidents</h2><span class="count" id="incidentCount"></span></div><div class="body" id="incidents"></div></div></section>
+  <section id="page-agents" data-workspace-page="agents" class="agent-workspace">
+    <div class="panel agent-picker" id="panel-agents">
+      <div class="head"><h2>Agents</h2><span class="count" id="agentCount"></span></div>
+      <div class="agent-controls"><label class="search"><input id="agentSearch" placeholder="Filter agents or PID…" autocomplete="off"></label><div class="scope-row"><span class="fchip" data-risk="all" aria-pressed="true">All agents</span><span class="fchip" data-risk="at_risk">At risk</span><span class="fchip" data-risk="unscored">Not evaluated</span></div></div>
+      <div class="body" id="agentsBody"></div>
+      <div class="picker-hint">Select an agent.<br><span>Sorted by risk.</span></div>
+    </div>
+    <div class="agent-investigation">
+      <div class="agent-subject"><div><span class="eyebrow">Selected agent</span><strong id="selectedAgentName">Select an agent</strong><span id="selectedAgentMeta"></span></div><button class="btn danger" id="selectedAgentStop" hidden>Stop</button></div>
+      <nav class="agent-tabs" id="agentTabs" aria-label="Agent investigation"></nav>
+      <div class="panel" id="panel-risk" data-agent-tab="overview"><div class="head"><h2 id="riskTitle">Overview</h2><span class="count" id="riskSub"></span></div><div class="body" id="risk"></div></div>
+      <div class="panel" id="panel-access" data-agent-tab="access" hidden><div class="head"><h2>Access</h2><span class="count">Declared · observed · reachable</span></div><div class="body" id="access"></div></div>
+      <div class="panel" id="panel-blast" data-agent-tab="blast" hidden><div class="head"><h2>Blast radius</h2><span class="count" id="blastSub"></span></div><div class="body" id="blast"></div></div>
+      <div class="panel" id="panel-activity" data-agent-tab="activity" hidden><div class="head"><h2>Activity</h2><span class="count" id="activityCount"></span></div><div class="body" id="activity"></div></div>
+      <div class="panel" id="panel-network" data-agent-tab="network" hidden><div class="head"><h2>Network</h2><span class="count" id="networkCount"></span><span class="spacer"></span><button class="btn quiet" id="networkBaselineReset" disabled title="Select an agent with retained network history">↻ Reset selected baseline</button></div><div class="body" id="network"></div></div>
+      <div class="panel" id="panel-processes" data-agent-tab="processes" hidden><div class="head"><h2>Processes</h2><span class="count" id="processCount"></span></div><div class="body" id="processes"></div></div>
+      <div class="panel" id="panel-actions" data-agent-tab="actions" hidden><div class="head"><h2>Actions</h2><span class="count" id="actionCount"></span></div><div class="body" id="actions"></div></div>
+      <div class="panel" id="panel-files" data-agent-tab="files" hidden><div class="head"><h2>Files</h2><span class="count" id="filesCount"></span></div><div class="body" id="files"></div></div>
+      <div class="panel" id="panel-behaviour-agent" data-agent-tab="behaviour" hidden><div class="head"><h2>Behaviour</h2><span class="count" id="behaviourAgentCount"></span></div><div class="body" id="behaviour-agent"></div></div>
+    </div>
+  </section>
+
+  <section id="page-network" data-workspace-page="network" hidden><div class="panel"><div class="head"><h2>Connections and listeners</h2><span class="count" id="networkHostCount"></span><span class="spacer"></span><select id="networkDirection" class="btn quiet"><option value="all">All directions</option><option value="outbound">Outbound</option><option value="listening">Listening</option></select><label class="search"><input id="networkSearch" placeholder="Search host, port, verdict…" autocomplete="off"></label></div><div class="body" id="network-host"></div></div></section>
+  <section id="page-events" data-workspace-page="events" hidden><div class="panel"><div class="head"><h2>Security events, newest first</h2><span class="count" id="eventCount"></span><span class="spacer"></span><select id="eventKind" class="btn quiet"><option value="all">All events</option><option value="started">Started</option><option value="stopped">Stopped</option><option value="grade_changed">Risk changed</option><option value="credential_exposed">Credential exposure</option><option value="policy_breach">Out of policy</option><option value="recon">Network scanning</option><option value="behaviour">Suspicious activity</option><option value="model_drift">Model changed</option><option value="action">Action</option></select><label class="search"><input id="eventSearch" placeholder="Search events…" autocomplete="off"></label></div><div class="body" id="events"></div></div></section>
+  <section id="page-behaviour" data-workspace-page="behaviour" hidden><div class="panel"><div class="head"><h2>Rule matches</h2><span class="count" id="behaviourHostCount"></span></div><div class="body" id="behaviour-host"></div></div></section>
+  <section id="page-assets" data-workspace-page="assets" hidden><div class="panel"><div class="head"><h2>Discovered AI assets</h2><span class="count" id="assetCount"></span><span class="spacer"></span><div class="export-control" role="group" aria-label="Export AI-BOM"><span class="export-label">AI-BOM</span><button class="btn primary" id="exportAibomHtml">HTML report</button><button class="btn" id="exportAibomJson">JSON</button></div><select id="assetKind" class="btn quiet"><option value="all">All asset types</option><option value="agent">Agents</option><option value="model">Models</option><option value="connector">Connectors</option><option value="endpoint">Endpoints</option><option value="tool">Tools</option></select><label class="search"><input id="assetSearch" placeholder="Search assets…" autocomplete="off"></label></div><div class="body" id="assets"></div></div></section>
+  <section id="page-response" data-workspace-page="response" hidden><div class="panel"><div class="head"><h2>Response rules and actions taken</h2><span class="count" id="responseCount"></span></div><div class="body" id="response"></div></div></section>
+  <section id="page-context" data-workspace-page="context" hidden><div class="panel"><div class="head"><h2>Session context (off by default)</h2><span class="count" id="contextCount"></span><span class="spacer"></span><button class="btn quiet" id="contextToggle">Enable context</button><button class="btn quiet" id="contextClear">Delete retained context</button></div><div class="body" id="context"></div></div></section>
+  <section id="page-health" data-workspace-page="health" hidden><div class="panel"><div class="head"><h2>Sensor status and coverage</h2><span class="count" id="healthCount"></span></div><div class="body" id="health"></div></div></section>
+  <section id="page-settings" data-workspace-page="settings" hidden><div class="panel"><div class="head"><h2>Settings</h2></div><div class="body" id="settings"></div></div></section>
+</main>
+</div>
 </div>
 
 <div id="legendScrim" hidden>
@@ -244,6 +164,8 @@ topgent policy check --input topgent-report.json \
 </div>
 
 
+<div class="scrim" id="inspectorScrim"></div>
+<aside class="inspector" id="inspector" aria-hidden="true"></aside>
 <script type="module" src="app.mjs"></script>
 </body>
 </html>

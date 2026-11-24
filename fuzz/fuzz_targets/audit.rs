@@ -10,6 +10,10 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
+    // The behaviour rules' syscall reader builds everywhere.
+    if let Ok(text) = std::str::from_utf8(data) {
+        let _ = topgent_collect::audit_syscalls::parse(text);
+    }
     #[cfg(target_os = "linux")]
     {
     if let Ok(text) = std::str::from_utf8(data) {

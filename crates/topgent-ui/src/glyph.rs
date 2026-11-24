@@ -27,6 +27,8 @@ pub enum Icon {
     Network,
     /// Event log: stacked lines.
     Events,
+    /// Behaviour: an eye.
+    Behaviour,
     /// Sensor health: a pulse.
     Health,
     /// Response: a shield.
@@ -51,6 +53,16 @@ pub enum Icon {
     Compact,
     /// Put the layout back.
     Reset,
+    /// Find anything.
+    Search,
+    /// Write this session out.
+    Export,
+    /// Hold the sweep where it is.
+    Pause,
+    /// The full record behind a summary.
+    Info,
+    /// Deeper into a record.
+    Chevron,
 }
 
 impl Icon {
@@ -69,6 +81,9 @@ impl Icon {
                 "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zm0 2c1.2 0 2.6 2.2 2.9 5.2H9.1C9.4 7.2 10.8 5 12 5zM5.2 11h2.9c0 .7 0 1.4.1 2H5.5a7 7 0 0 1-.3-2zm4.9 0h3.8c.1.6.1 1.3 0 2h-3.8a17 17 0 0 1 0-2zm5.8 0h2.9a7 7 0 0 1-.3 2h-2.7c.1-.6.1-1.3.1-2z"
             }
             Self::Events => "M4 6h16M4 10h16M4 14h11M4 18h7",
+            Self::Behaviour => {
+                "M2 12c2.5-4.5 6-7 10-7s7.5 2.5 10 7c-2.5 4.5-6 7-10 7s-7.5-2.5-10-7zM12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6z"
+            }
             Self::Health => "M3 12h4l2-5 3 10 2.5-6 1.5 3h5",
             Self::Response => "M12 3l7 3v6c0 4-3 7-7 9-4-2-7-5-7-9V6z",
             Self::Context => "M5 5h14v10H9l-4 4z",
@@ -86,6 +101,11 @@ impl Icon {
             Self::Refresh => "M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5",
             Self::Compact => "M4 4h16v16H4zM13 11h6M13 11v6",
             Self::Reset => "M4 9h16M4 15h16M9 4v4M9 16v4",
+            Self::Search => "M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14zM16 16l4 4",
+            Self::Export => "M12 3v12M8 7l4-4 4 4M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4",
+            Self::Pause => "M9 5v14M15 5v14",
+            Self::Info => "M12 3a9 9 0 1 1 0 18 9 9 0 0 1 0-18zM12 10v7M12 7v.01",
+            Self::Chevron => "M9 5l7 7-7 7",
         }
     }
 
@@ -104,6 +124,11 @@ impl Icon {
                 | Self::Refresh
                 | Self::Compact
                 | Self::Reset
+                | Self::Search
+                | Self::Export
+                | Self::Pause
+                | Self::Info
+                | Self::Chevron
         )
     }
 }
@@ -140,13 +165,14 @@ fn hex(c: Color) -> String {
 mod tests {
     use super::*;
 
-    const EVERY: [Icon; 18] = [
+    const EVERY: [Icon; 19] = [
         Icon::Risk,
         Icon::Access,
         Icon::Blast,
         Icon::Activity,
         Icon::Network,
         Icon::Events,
+        Icon::Behaviour,
         Icon::Health,
         Icon::Response,
         Icon::Context,

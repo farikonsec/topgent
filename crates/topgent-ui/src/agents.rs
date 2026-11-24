@@ -1,717 +1,1026 @@
-//! The header and the agent table.
+//! The agent list and one agent's investigation.
 //!
-//! Both are pure functions from a report and a style to a widget tree. Nothing
-//! here reads the clock, the filesystem, or anything outside its arguments,
-//! which is what makes them testable.
+//! The investigation is the point of this window, so it gets the shape: a
+//! stable list on the left that never moves under the pointer, the selected
+//! agent's identity above the evidence rather than in a strip at the bottom of
+//! the window, and five tabs that are all about the same entity. An operator
+//! answers four questions in order — which agent needs attention, what is the
+//! strongest reason, what can it reach versus what did it do, and what can I do
+//! about it — and each of those questions is answered without leaving this
+//! region.
+//!
+//! Every function here is pure: a report and a style in, a widget tree out.
+//! Nothing reads the clock, the filesystem, or anything outside its arguments.
 
 use crate::Message;
 use crate::report::{Agent, Report};
-use crate::table::{self, Tables};
 use crate::theme::{self, Region, Style, size, space};
 
-use iced::widget::{Column, button, column, container, row, svg, text};
+use iced::widget::{Column, button, column, container, row, scrollable, text, text_input};
 use iced::{Element, Length};
 
-/// The bar above everything: what was found, and one line if a sensor cannot run.
-pub fn header<'a>(
-    report: Option<&Report>,
-    sweeping: bool,
-    swept_at: Option<u64>,
-    s: Style,
-) -> Element<'a, Message> {
-    let p = s.palette;
-    let mut bar = Column::new()
-        .spacing(s.pad(space::TIGHT))
-        .push(summary(report, sweeping, swept_at, s));
+/// Which evidence about the selected agent is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Tab {
+    /// Why it scores what it does, and what that means.
+    #[default]
+    Overview,
+    /// What it declared, what was observed, what it can reach.
+    Access,
+    /// What an attacker reaches if it is compromised.
+    Blast,
+    /// What was observed, in order.
+    Activity,
+    /// Its own connections and listeners.
+    Network,
+    /// Every process it started, including those that have gone.
+    Processes,
+    /// Direct file and connection actions, retained after exit.
+    Actions,
+    /// What it read, and where its data went.
+    Files,
+    /// Behaviour rules that held on this agent's processes.
+    Behaviour,
+}
 
-    // One line, not one per sensor. The reasons are in the sensor-health panel
-    // in full; repeating them above every screen made a permanent property of
-    // the platform look like a fault that had just occurred.
-    if let Some(unavailable) = report.map(|r| r.failures.len()).filter(|n| *n > 0) {
-        bar = bar.push(
-            button(
-                text(format!(
-                    "{unavailable} sensor{} unavailable on this host",
-                    if unavailable == 1 { "" } else { "s" }
-                ))
-                .font(theme::STRONG)
-                .size(s.type_size(size::BODY))
-                .color(p.medium),
-            )
-            .on_press(Message::Show(crate::panels::Panel::Health))
-            .style(move |t, st| {
-                let mut style = button::text(t, st);
-                style.text_color = p.medium;
-                style
-            })
-            .padding(0),
-        );
+impl Tab {
+    /// Every tab, in the order they are drawn.
+    pub const ALL: [Self; 9] = [
+        Self::Overview,
+        Self::Access,
+        Self::Blast,
+        Self::Activity,
+        Self::Network,
+        Self::Processes,
+        Self::Actions,
+        Self::Files,
+        Self::Behaviour,
+    ];
+
+    /// The tab's label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Overview => "Overview",
+            Self::Access => "Access",
+            Self::Blast => "Blast radius",
+            Self::Activity => "Activity",
+            Self::Network => "Network",
+            Self::Processes => "Processes",
+            Self::Actions => "Actions",
+            Self::Files => "Files",
+            Self::Behaviour => "Behaviour",
+        }
     }
 
-    container(bar)
-        .style(theme::region(Region::Chrome, p))
-        .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
-        .width(Length::Fill)
-        .into()
-}
-
-/// Endpoints outside this machine.
-///
-/// Loopback, link-local, and the unroutable ranges are not "outside": counting
-/// them makes every host look like it is talking to the world.
-fn external_endpoints(report: &Report) -> usize {
-    report
-        .network
-        .iter()
-        .filter(|e| e.currently_observed && e.peer_observable)
-        .filter(|e| {
-            e.host
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| !ip.is_loopback() && !is_private(ip))
-        })
-        .count()
-}
-
-fn is_private(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => v4.is_private() || v4.is_link_local() || v4.is_unspecified(),
-        std::net::IpAddr::V6(v6) => {
-            v6.is_unspecified() || (v6.segments().first().copied().unwrap_or(0) & 0xfe00) == 0xfc00
+    /// Which panel draws this tab's evidence. `Overview` draws its own, because
+    /// it is the only one that interprets rather than lists.
+    #[must_use]
+    pub const fn panel(self) -> Option<crate::panels::Panel> {
+        use crate::panels::Panel;
+        match self {
+            Self::Overview => None,
+            Self::Access => Some(Panel::Access),
+            Self::Blast => Some(Panel::Blast),
+            Self::Activity => Some(Panel::Activity),
+            Self::Network => Some(Panel::Network),
+            Self::Processes => Some(Panel::Processes),
+            Self::Actions => Some(Panel::Actions),
+            Self::Files => Some(Panel::Files),
+            Self::Behaviour => Some(Panel::Behaviour),
         }
     }
 }
 
-/// Resources the operator asked to be told about that an agent has reached.
+/// Which agents the list is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Scope {
+    /// Everything found.
+    #[default]
+    All,
+    /// Critical and high only.
+    AtRisk,
+    /// Anything the scoring rules have not reached.
+    Unscored,
+}
+
+impl Scope {
+    /// Every scope, in the order the filter row lists them.
+    pub const ALL: [Self; 3] = [Self::All, Self::AtRisk, Self::Unscored];
+
+    /// The chip's label.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::All => "All agents",
+            Self::AtRisk => "At risk",
+            Self::Unscored => "Not evaluated",
+        }
+    }
+
+    /// Whether one agent belongs in this scope.
+    #[must_use]
+    pub fn holds(self, agent: &Agent) -> bool {
+        let grade = agent.grade.to_ascii_uppercase();
+        match self {
+            Self::All => true,
+            Self::AtRisk => matches!(grade.as_str(), "CRITICAL" | "HIGH"),
+            Self::Unscored => !matches!(grade.as_str(), "CRITICAL" | "HIGH" | "MEDIUM" | "LOW"),
+        }
+    }
+}
+
+/// The agents this list is showing, worst first.
 ///
-/// The number an operator configured a watchlist in order to see. It was
-/// nowhere in the window.
-fn watched_reached(report: &Report) -> usize {
-    report
-        .response
-        .decisions
+/// Ordering is by score and then pid, so the list is stable across sweeps: a
+/// list that reorders while it is being read is one nobody can click.
+#[must_use]
+pub fn shortlist<'a>(report: &'a Report, filter: &str, scope: Scope) -> Vec<&'a Agent> {
+    let needle = filter.trim().to_ascii_lowercase();
+    let mut ordered: Vec<&Agent> = report
+        .agents
         .iter()
-        .filter(|d| !d.outcome.is_empty() && d.outcome != "not_matched")
-        .count()
+        .chain(&report.ended_agents)
+        .filter(|a| scope.holds(a))
+        .filter(|a| {
+            needle.is_empty()
+                || a.label().to_ascii_lowercase().contains(&needle)
+                || a.pid.to_string().contains(&needle)
+                || a.exe
+                    .as_deref()
+                    .is_some_and(|e| e.to_ascii_lowercase().contains(&needle))
+        })
+        .collect();
+    // Running first, then ended; each worst first.
+    ordered.sort_by_key(|a| (a.has_ended(), std::cmp::Reverse(a.score), a.pid));
+    ordered
 }
 
-/// Sweep now, rather than waiting for the timer.
-///
-/// A monitor whose only way to refresh is to wait is a monitor you cannot use
-/// to check whether the thing you just did was seen.
-fn refresh_button<'a>(sweeping: bool, s: Style) -> Element<'a, Message> {
-    let p = s.palette;
-    let tint = if sweeping { p.faint } else { p.muted };
-    button(
-        row![
-            crate::glyph::view(
-                crate::glyph::Icon::Refresh,
-                s.type_size(size::DISPLAY),
-                tint
-            ),
-            text(if sweeping { "Scanning" } else { "Refresh" })
-                .font(theme::STRONG)
-                .size(s.type_size(size::LABEL))
-                .color(tint),
-        ]
-        .spacing(s.pad(space::TIGHT))
-        .align_y(iced::Alignment::Center),
-    )
-    // Disabled while a sweep is outstanding. Two sweeps at once accumulate
-    // subprocesses, which this product has already been bitten by.
-    .on_press_maybe((!sweeping).then_some(Message::Sweep))
-    .style(move |_, status| utility_style(status, p))
-    .padding([s.pad(space::SNUG), s.pad(space::BASE)])
-    .into()
-}
-
-/// The branded instrument header: identity and controls above, telemetry below.
-fn summary<'a>(
-    report: Option<&Report>,
-    sweeping: bool,
-    swept_at: Option<u64>,
+/// The list an investigation starts from.
+pub fn list<'a>(
+    report: &'a Report,
+    selected: Option<u32>,
+    filter: &str,
+    scope: Scope,
+    width: f32,
     s: Style,
 ) -> Element<'a, Message> {
     let p = s.palette;
-    let count = report.map_or(0, |r| r.agents.len());
-    let worst = report.and_then(Report::worst);
+    let shown = shortlist(report, filter, scope);
 
-    // First in the row, not last. It used to sit after Settings, which on a
-    // 1280-wide screen put it past the right edge of a 1320-wide window: the
-    // control was drawn, unreachable, and looked to the operator as though it
-    // did not exist. A control that announces a missing capability belongs
-    // where it is seen, ahead of the preferences.
-    // Always present, never vanishing. The button used to disappear the moment
-    // the grant landed, which left no way to tell an enabled capability from a
-    // control that had never been there. It is a status now, and pressing it
-    // opens the same dialog.
-    let capture_state = topgent_collect::capture::offer().state;
-    // Asked of the capture itself, not inferred from the permission. A granted
-    // capability that nothing is using and a capture that is reading packets
-    // are different states, and the indicator has to be able to say which.
-    let (capture_label, capture_tone) = topgent_collect::capture::indicator();
-    let capture = capture_state.is_actionable();
-    let controls = row![
-        refresh_button(sweeping, s),
-        chrome_button(
-            crate::glyph::Icon::Reset,
-            "Reset".to_owned(),
-            "Reset panel sizes",
-            Message::ResetSplit,
-            s,
-        ),
-        chrome_button(
-            crate::glyph::Icon::Compact,
-            "Compact".to_owned(),
-            "Shrink to a small always-on-top window",
-            Message::ToggleCompact,
-            s,
-        ),
-        settings_button(s),
-    ]
-    .spacing(s.pad(space::TIGHT))
-    .align_y(iced::Alignment::Center);
-
-    // Offered only when there is something to grant. A control that is always
-    // present and usually does nothing teaches people to ignore it, and this
-    // is the one control that must not be ignored.
-    let controls = if capture {
-        row![
-            status_button(
-                crate::glyph::Icon::Response,
-                capture_label,
-                tone_colour(capture_tone, s),
-                Message::AskCapture,
-                s,
-            ),
-            controls,
-        ]
-        .spacing(s.pad(space::TIGHT))
-        .align_y(iced::Alignment::Center)
-    } else {
-        controls
-    };
-
-    let telemetry = row![
-        fact("Agents", count.to_string(), p.text, s),
-        fact(
-            "Last scan",
-            swept_at.map_or_else(|| "never".to_owned(), crate::clock::stamp),
-            p.muted,
-            s,
-        ),
-        fact(
-            "External connections",
-            report.map_or_else(|| "-".to_owned(), |r| external_endpoints(r).to_string()),
-            if report.is_some_and(|r| external_endpoints(r) > 0) {
-                p.high
-            } else {
-                p.muted
-            },
-            s,
-        ),
-        fact(
-            "Sensitive files hit",
-            report.map_or_else(|| "-".to_owned(), |r| watched_reached(r).to_string()),
-            report.map_or(p.muted, |r| {
-                if watched_reached(r) > 0 {
-                    p.critical
+    let mut cards = Column::new().spacing(s.pad(space::SNUG));
+    if shown.is_empty() {
+        cards = cards.push(
+            container(
+                text(if report.agents.is_empty() {
+                    "No AI agents are running on this machine."
                 } else {
-                    p.muted
-                }
-            }),
-            s,
-        ),
-    ]
-    .spacing(s.pad(space::LOOSE))
-    .align_y(iced::Alignment::Center);
+                    "No agent matches this filter."
+                })
+                .size(s.type_size(size::EMPHASIS))
+                .color(p.muted),
+            )
+            .padding(s.pad(space::WIDE)),
+        );
+    }
+    let mut ended_heading = false;
+    for agent in shown {
+        if agent.has_ended() && !ended_heading {
+            ended_heading = true;
+            cards = cards.push(
+                text("ENDED THIS SESSION")
+                    .font(theme::STRONG)
+                    .size(s.type_size(size::MICRO))
+                    .color(p.faint),
+            );
+        }
+        cards = cards.push(card(agent, selected == Some(agent.pid), s));
+    }
 
-    column![
-        row![
-            brand(s),
-            live_status(sweeping, s),
-            posture(worst, s),
-            iced::widget::space().width(Length::Fill),
-            controls,
-        ]
-        .spacing(s.pad(space::BASE))
-        .align_y(iced::Alignment::Center),
-        container(telemetry)
-            .style(move |_| iced::widget::container::Style {
-                background: Some(p.background.into()),
+    let controls = column![
+        text_input("Filter agents or PID\u{2026}", filter)
+            .on_input(Message::FilterAgents)
+            .size(s.type_size(size::EMPHASIS))
+            .padding([s.pad(space::SNUG), s.pad(space::BASE)])
+            .style(move |_, _| text_input::Style {
+                background: p.background.into(),
                 border: iced::Border {
                     color: p.border,
                     width: 1.0,
                     radius: theme::radius::CONTROL.into(),
                 },
-                ..iced::widget::container::Style::default()
-            })
-            .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
-            .width(Length::Fill),
+                icon: p.faint,
+                placeholder: p.faint,
+                value: p.text,
+                selection: p.selection(),
+            }),
+        row(Scope::ALL.map(|option| chip(option, option == scope, s))).spacing(s.pad(space::TIGHT)),
     ]
-    .spacing(s.pad(space::TIGHT))
-    .into()
-}
+    .spacing(s.pad(space::SNUG))
+    .padding(s.pad(space::BASE));
 
-/// Product mark and wordmark. The mark is the same process-list symbol used
-/// in the README and application icon, so the desktop chrome and repository
-/// identify themselves as the same product.
-fn brand<'a>(s: Style) -> Element<'a, Message> {
-    let p = s.palette;
-    let logo = svg(svg::Handle::from_memory(
-        include_bytes!("../../../assets/icon.svg").as_slice(),
-    ))
-    .width(Length::Fixed(44.0))
-    .height(Length::Fixed(44.0));
-
-    row![
-        logo,
+    let hint = container(
         column![
-            row![
-                text("TOP")
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::BRAND))
-                    .color(p.text),
-                text("GENT")
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::BRAND))
-                    .color(p.accent),
-            ]
-            .spacing(0),
-            text("AGENT BEHAVIOUR SECURITY")
-                .font(theme::STRONG)
+            text("Select an agent to investigate.")
+                .size(s.type_size(size::MICRO))
+                .color(p.faint),
+            text("Sorted by risk.")
                 .size(s.type_size(size::MICRO))
                 .color(p.faint),
         ]
         .spacing(s.pad(space::HAIR)),
-    ]
-    .spacing(s.pad(space::SNUG))
-    .align_y(iced::Alignment::Center)
-    .width(Length::Fixed(208.0))
-    .into()
-}
+    )
+    .padding([s.pad(space::SNUG), s.pad(space::BASE)])
+    .width(Length::Fill);
 
-/// The state of collection, kept separate from posture. A healthy scanner can
-/// be looking at a critical host; combining those two answers into one dot is
-/// how a reassuring green light hides a dangerous result.
-fn live_status<'a>(sweeping: bool, s: Style) -> Element<'a, Message> {
-    let p = s.palette;
-    let tint = if sweeping { p.medium } else { p.low };
-    row![
-        text("\u{25cf}").size(s.type_size(size::BODY)).color(tint),
-        text(if sweeping { "SCANNING" } else { "LIVE" })
-            .font(theme::STRONG)
-            .size(s.type_size(size::LABEL))
-            .color(tint),
-    ]
-    .spacing(s.pad(space::TIGHT))
-    .align_y(iced::Alignment::Center)
-    .width(Length::Fixed(84.0))
-    .into()
-}
-
-/// The answer the operator came for, given enough visual weight to remain
-/// visible while the rest of the header is scanned.
-fn posture<'a>(worst: Option<&Agent>, s: Style) -> Element<'a, Message> {
-    let p = s.palette;
-    let (grade, score, tint) = worst.map_or_else(
-        || ("CLEAR".to_owned(), "—".to_owned(), p.inert),
-        |agent| {
-            (
-                agent.grade.to_ascii_uppercase(),
-                agent.score.to_string(),
-                p.grade(&agent.grade),
-            )
-        },
-    );
-    row![
-        container(iced::widget::space())
-            .width(Length::Fixed(3.0))
-            .height(Length::Fixed(
-                s.type_size(size::DISPLAY) + s.pad(space::SNUG)
-            ))
-            .style(move |_| iced::widget::container::Style {
-                background: Some(tint.into()),
-                ..iced::widget::container::Style::default()
-            }),
+    container(
         column![
-            text("Host posture")
+            controls,
+            scrollable(container(cards).padding([0.0, s.pad(space::BASE)]))
+                .height(Length::Fill)
+                .width(Length::Fill),
+            hint,
+        ]
+        .height(Length::Fill),
+    )
+    .style(theme::region(Region::Chrome, p))
+    .width(Length::Fixed(width))
+    .height(Length::Fill)
+    .into()
+}
+
+/// One agent, as a row scanned rather than a record read.
+///
+/// Name, score, what it belongs to, its pid, the strongest finding, and the two
+/// words that say its band and whether it is still running. Everything else is
+/// in the investigation beside it: a list cell wide enough for an executable
+/// path is a list nobody can scan.
+fn card(agent: &Agent, selected: bool, s: Style) -> Element<'_, Message> {
+    let p = s.palette;
+    let tint = p.grade(&agent.grade);
+    let finding = agent
+        .factors
+        .iter()
+        .max_by_key(|f| f.points)
+        .map_or("No findings", |f| f.title.as_str());
+
+    let body = column![
+        row![
+            text(agent.label())
                 .font(theme::STRONG)
-                .size(s.type_size(size::BODY))
+                .size(s.type_size(size::EMPHASIS))
+                .color(p.text)
+                .wrapping(iced::widget::text::Wrapping::None),
+            iced::widget::space().width(Length::Fill),
+            text(agent.score.to_string())
+                .font(theme::MONO)
+                .size(s.type_size(size::EMPHASIS))
+                .color(tint),
+        ]
+        .align_y(iced::Alignment::Center),
+        row![
+            // The model beside how the agent was recognised: which LLM it
+            // is, not only which tool.
+            text(match agent.model.as_deref() {
+                Some(model) => format!(
+                    "{} \u{b7} {}",
+                    agent.recognition(),
+                    crate::report::short_model(model)
+                ),
+                None => agent.recognition().to_owned(),
+            })
+            .size(s.type_size(size::MICRO))
+            .color(p.faint),
+            iced::widget::space().width(Length::Fill),
+            text(agent.pid.to_string())
+                .font(theme::MONO)
+                .size(s.type_size(size::MICRO))
                 .color(p.faint),
-            row![
-                text(grade)
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::HEADING))
-                    .color(tint),
-                text(score)
-                    .font(theme::MONO)
-                    .size(s.type_size(size::DISPLAY))
-                    .color(tint),
-            ]
-            .spacing(s.pad(space::SNUG))
-            .align_y(iced::Alignment::Center),
+        ],
+        text(finding.to_owned())
+            .size(s.type_size(size::MICRO))
+            .color(p.muted),
+        row![
+            badge(&agent.grade.to_ascii_uppercase(), tint, s),
+            text(agent.state_line())
+                .size(s.type_size(size::MICRO))
+                .color(if agent.has_ended() { p.muted } else { p.faint }),
         ]
-        .spacing(s.pad(space::HAIR)),
+        .spacing(s.pad(space::SNUG))
+        .align_y(iced::Alignment::Center),
     ]
-    .spacing(s.pad(space::SNUG))
-    .align_y(iced::Alignment::Center)
-    .width(Length::Fixed(144.0))
-    .into()
-}
+    .spacing(s.pad(space::TIGHT));
 
-/// One labelled value in the header. The label is always drawn, because a
-/// number with no name is a number nobody can act on.
-fn fact(
-    label: &str,
-    value: impl Into<String>,
-    colour: iced::Color,
-    s: Style,
-) -> Element<'_, Message> {
-    column![
-        text(label.to_ascii_uppercase())
-            .font(theme::STRONG)
-            .size(s.type_size(size::BODY))
-            .color(s.palette.faint),
-        text(value.into())
-            .font(theme::STRONG)
-            .size(s.type_size(size::HEADING))
-            .color(colour),
-    ]
-    .spacing(s.pad(space::HAIR))
-    .into()
-}
-
-fn settings_button<'a>(s: Style) -> Element<'a, Message> {
-    chrome_button(
-        crate::glyph::Icon::Settings,
-        "Settings".to_owned(),
-        "Preferences",
-        Message::ToggleSettings,
-        s,
-    )
-}
-
-/// One control in the window's own chrome, with the sentence that says what it
-/// does. A glyph with no word beside it is a puzzle.
-fn chrome_button(
-    icon: crate::glyph::Icon,
-    // Owned, because one of these labels is computed rather than fixed: the
-    // capture indicator reports what the capture is actually doing.
-    label: String,
-    _detail: &str,
-    message: Message,
-    s: Style,
-) -> Element<'static, Message> {
-    let p = s.palette;
     button(
         row![
-            crate::glyph::view(icon, s.type_size(size::DISPLAY), p.muted),
-            text(label)
-                .font(theme::STRONG)
-                .size(s.type_size(size::LABEL))
-                .color(p.muted),
+            container(iced::widget::space())
+                .width(Length::Fixed(3.0))
+                .height(Length::Fill)
+                .style(move |_| container::Style {
+                    background: Some(tint.into()),
+                    ..container::Style::default()
+                }),
+            container(body).padding([s.pad(space::BASE), s.pad(space::BASE)]),
         ]
-        .spacing(s.pad(space::HAIR))
-        .align_y(iced::Alignment::Center),
+        .spacing(s.pad(space::BASE)),
     )
-    .on_press(message)
-    .style(move |_, status| utility_style(status, p))
-    .padding([s.pad(space::SNUG), s.pad(space::BASE)])
-    .into()
-}
-
-/// The one chrome control that carries a state, drawn so the state is visible
-/// before the words are read.
-///
-/// Separate from [`chrome_button`] rather than a colour argument on it, because
-/// every other control in that row is an action with no state to report, and a
-/// tinted Reset would be a colour that means nothing.
-fn status_button(
-    icon: crate::glyph::Icon,
-    label: String,
-    tone: iced::Color,
-    message: Message,
-    s: Style,
-) -> Element<'static, Message> {
-    let p = s.palette;
-    button(
-        row![
-            crate::glyph::view(icon, s.type_size(size::DISPLAY), tone),
-            text(label)
-                .font(theme::STRONG)
-                .size(s.type_size(size::LABEL))
-                .color(tone),
-        ]
-        .spacing(s.pad(space::HAIR))
-        .align_y(iced::Alignment::Center),
-    )
-    .on_press(message)
+    .on_press(Message::Select(agent.pid))
+    .width(Length::Fill)
+    .padding(0)
     .style(move |_, status| button::Style {
+        background: Some(
+            if selected {
+                p.selection()
+            } else if matches!(status, button::Status::Hovered) {
+                p.hover()
+            } else {
+                p.surface
+            }
+            .into(),
+        ),
+        text_color: p.text,
         border: iced::Border {
-            color: tone,
-            ..utility_style(status, p).border
+            color: if selected { p.accent } else { p.border },
+            width: 1.0,
+            radius: theme::radius::PANEL.into(),
         },
-        text_color: tone,
-        ..utility_style(status, p)
+        ..button::Style::default()
     })
-    .padding([s.pad(space::SNUG), s.pad(space::BASE)])
     .into()
 }
 
-/// The colour one capture state is drawn in.
-///
-/// `Inactive` stays the ordinary control colour on purpose. Capture being off
-/// is a choice, not a fault, and painting it like a fault would teach people to
-/// ignore the colours that are.
-fn tone_colour(tone: topgent_collect::capture::Tone, s: Style) -> iced::Color {
-    use topgent_collect::capture::Tone;
-    match tone {
-        Tone::Active => s.palette.low,
-        Tone::Pending | Tone::Unknown => s.palette.medium,
-        Tone::Inactive => s.palette.muted,
-        Tone::Unavailable => s.palette.faint,
-    }
+/// A word in a tinted box. The word is the fact; the colour only repeats it.
+fn badge<'a>(label: &str, tint: iced::Color, s: Style) -> Element<'a, Message> {
+    container(
+        text(label.to_owned())
+            .font(theme::STRONG)
+            .size(s.type_size(size::MICRO))
+            .color(tint),
+    )
+    .style(move |_| container::Style {
+        background: Some(iced::Color { a: 0.14, ..tint }.into()),
+        border: iced::Border {
+            color: iced::Color { a: 0.4, ..tint },
+            width: 1.0,
+            radius: theme::radius::CONTROL.into(),
+        },
+        ..container::Style::default()
+    })
+    .padding([s.pad(space::HAIR), s.pad(space::SNUG)])
+    .into()
 }
 
-fn utility_style(status: button::Status, p: theme::Palette) -> button::Style {
-    button::Style {
+fn chip(scope: Scope, chosen: bool, s: Style) -> Element<'static, Message> {
+    let p = s.palette;
+    button(
+        text(scope.label())
+            .font(theme::STRONG)
+            .size(s.type_size(size::MICRO))
+            .color(if chosen { p.text } else { p.muted }),
+    )
+    .on_press(Message::SetScope(scope))
+    .padding([s.pad(space::TIGHT), s.pad(space::SNUG)])
+    .style(move |_, status| button::Style {
         background: Some(
-            if matches!(status, button::Status::Hovered | button::Status::Pressed) {
+            if chosen {
+                p.selection()
+            } else if matches!(status, button::Status::Hovered) {
                 p.hover()
             } else {
                 p.background
             }
             .into(),
         ),
-        text_color: p.muted,
+        text_color: p.text,
         border: iced::Border {
-            color: p.border,
+            color: if chosen { p.accent } else { p.border },
             width: 1.0,
             radius: theme::radius::CONTROL.into(),
         },
         ..button::Style::default()
-    }
-}
-
-/// The agent table, worst first.
-pub fn table<'a>(
-    report: &'a Report,
-    selected: Option<u32>,
-    tables: &'a Tables,
-    s: Style,
-) -> Element<'a, Message> {
-    let p = s.palette;
-    let mut ordered: Vec<&Agent> = report.agents.iter().collect();
-    ordered.sort_by_key(|a| (std::cmp::Reverse(a.score), a.pid));
-
-    let rows = ordered
-        .into_iter()
-        .map(|a| {
-            let top = a
-                .factors
-                .iter()
-                .max_by_key(|f| f.points)
-                .map_or("-", |f| f.title.as_str());
-            table::Row::new(vec![
-                table::Cell::tinted(a.label(), p.grade(&a.grade)),
-                // The grade prints its own name, so colour is never the only
-                // signal that a row is the worst one on the host. Grade and
-                // score are two columns because one column wide enough for
-                // "CRITICAL 100" leaves nothing for the path.
-                table::Cell::tinted(a.grade.clone(), p.grade(&a.grade)),
-                table::Cell::tinted(a.score.to_string(), p.grade(&a.grade)),
-                // A dash rather than a blank: nothing named a model is an
-                // answer, and an empty cell reads as a rendering fault.
-                table::Cell::new(a.model.clone().unwrap_or_else(|| "-".into())),
-                table::Cell::new(a.recognition()),
-                table::Cell::new(a.user.clone().unwrap_or_else(|| "unknown".into())),
-                table::Cell::new(a.pid.to_string()),
-                table::Cell::new(crate::clock::stamp(a.started_at)),
-                table::Cell::path(a.exe.clone().unwrap_or_else(|| "not readable".into())),
-                table::Cell::new(top),
-            ])
-            .selectable(a.pid, selected == Some(a.pid))
-            .marked(p.grade(&a.grade))
-        })
-        .collect();
-
-    container(table::view(
-        table::Id::Agents,
-        &COLUMNS,
-        rows,
-        &table::state_of(tables, table::Id::Agents),
-        "No AI agents are running on this machine.",
-        s,
-    ))
-    .style(theme::region(Region::Panel, p))
-    .padding(s.pad(space::SNUG))
-    .width(Length::Fill)
-    .height(Length::Shrink)
+    })
     .into()
 }
 
-/// The columns, and what each is for.
+/// Who this agent is, directly above the evidence about it.
 ///
-/// `RECOGNITION` exists because a process Topgent named, one it examined and
-/// could not name, and one whose executable it could not read are three
-/// different answers, and the table used to print the same words for the last
-/// two.
-/// The agent table's columns, for anything that needs to resize one.
-#[must_use]
-pub fn columns() -> &'static [table::Column2] {
-    &COLUMNS
+/// The old interface put this in a strip at the bottom of the window, so the
+/// identity of the thing being investigated was as far from its evidence as the
+/// layout allowed. Name, band, pid, recognition, and model sit here; the full
+/// executable, account, and start time are one press away in the inspector,
+/// because a path long enough to fill the window cannot share a line with a
+/// control.
+pub fn identity(agent: &Agent, inspecting: bool, s: Style) -> Element<'_, Message> {
+    let p = s.palette;
+    let tint = p.grade(&agent.grade);
+
+    let subject = row![
+        container(iced::widget::space())
+            .width(Length::Fixed(4.0))
+            .height(Length::Fixed(s.type_size(size::SUBJECT) * 1.8))
+            .style(move |_| container::Style {
+                background: Some(tint.into()),
+                ..container::Style::default()
+            }),
+        column![
+            row![
+                text(agent.label())
+                    .font(theme::STRONG)
+                    .size(s.type_size(size::SUBJECT))
+                    .color(p.text),
+                badge(&agent.grade.to_ascii_uppercase(), tint, s),
+            ]
+            .spacing(s.pad(space::BASE))
+            .align_y(iced::Alignment::Center),
+            row![
+                text(format!("PID {}", agent.pid))
+                    .font(theme::MONO)
+                    .size(s.type_size(size::EMPHASIS))
+                    .color(p.muted),
+                text("·").size(s.type_size(size::EMPHASIS)).color(p.border),
+                text(
+                    agent
+                        .user
+                        .clone()
+                        .unwrap_or_else(|| "unknown account".into())
+                )
+                .size(s.type_size(size::EMPHASIS))
+                .color(p.muted),
+                text("·").size(s.type_size(size::EMPHASIS)).color(p.border),
+                text(agent.recognition())
+                    .size(s.type_size(size::EMPHASIS))
+                    .color(p.muted),
+                text("·").size(s.type_size(size::EMPHASIS)).color(p.border),
+                text(agent.model_line())
+                    .size(s.type_size(size::EMPHASIS))
+                    .color(p.muted),
+            ]
+            .spacing(s.pad(space::SNUG))
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(s.pad(space::TIGHT)),
+    ]
+    .spacing(s.pad(space::BASE))
+    .align_y(iced::Alignment::Center);
+    let actions = row![
+        iced::widget::space().width(Length::Fill),
+        crate::shell::chrome_button(
+            crate::glyph::Icon::Info,
+            if inspecting { "Hide record" } else { "Record" }.to_owned(),
+            Message::ToggleInspector,
+            s,
+        ),
+        stop_button(agent.pid, s),
+    ]
+    .spacing(s.pad(space::BASE))
+    .align_y(iced::Alignment::Center);
+
+    // The identity may be arbitrarily long. Give it its own clipped row so it
+    // cannot consume the Stop action's space at narrow widths or large scale.
+    let mut block = Column::new()
+        .spacing(s.pad(space::BASE))
+        .push(container(subject).width(Length::Fill).clip(true))
+        .push(actions);
+    if inspecting {
+        block = block.push(inspector(agent, s));
+    }
+
+    container(block)
+        .padding([s.pad(space::WIDE), s.pad(space::LOOSE)])
+        .width(Length::Fill)
+        .into()
 }
 
-static COLUMNS: [table::Column2; 10] = [
-    table::Column2::text("AGENT", 4),
-    table::Column2::text("RISK", 3),
-    table::Column2::text("SCORE", 2).number(),
-    // Which model is behind the agent. An alias, never a dated build: only a
-    // provider's response carries that, and Topgent reads neither traffic nor
-    // responses. The column says what was read, and the detail below says
-    // where it was read from.
-    table::Column2::text("MODEL", 4),
-    table::Column2::text("IDENTITY", 4),
-    table::Column2::text("USER", 2),
-    table::Column2::text("PID", 2).number().mono(),
-    table::Column2::text("STARTED", 3).mono(),
-    table::Column2::text("EXECUTABLE", 5).mono(),
-    table::Column2::text("FINDING", 4),
-];
+/// What the identity rests on, with any limit the report named.
+fn identity_record(agent: &Agent) -> String {
+    let mut record = agent.recognition().to_owned();
+    for limit in &agent.identity_evidence.limits {
+        record.push_str(". ");
+        record.push_str(limit);
+    }
+    record
+}
 
-/// The detail of one agent, under the table, and the footer.
+/// The full record behind the row: the values that are too long, too precise,
+/// or too rarely needed to sit in the header.
+fn inspector(agent: &Agent, s: Style) -> Element<'_, Message> {
+    let p = s.palette;
+    let mut fields = Column::new().spacing(s.pad(space::SNUG));
+    for (label, value, copyable) in [
+        (
+            "Executable",
+            agent
+                .exe
+                .clone()
+                .unwrap_or_else(|| "not readable on this host".into()),
+            agent.exe.is_some(),
+        ),
+        (
+            "Account",
+            agent.user.clone().unwrap_or_else(|| "unknown".into()),
+            false,
+        ),
+        ("Started", crate::clock::stamp(agent.started_at), false),
+        (
+            "Runs in",
+            agent.container.as_ref().map_or_else(
+                || "the host, or a container Topgent could not name".to_owned(),
+                crate::report::AgentContainer::describe,
+            ),
+            false,
+        ),
+        ("Identity evidence", identity_record(agent), false),
+        ("Model provenance", agent.model_provenance(), false),
+    ] {
+        let owned = value.clone();
+        fields = fields.push(
+            row![
+                text(label)
+                    .font(theme::STRONG)
+                    .size(s.type_size(size::MICRO))
+                    .color(p.faint)
+                    .width(Length::Fixed(140.0)),
+                text(value)
+                    .font(theme::MONO)
+                    .size(s.type_size(size::BODY))
+                    .color(p.text)
+                    .width(Length::Fill),
+                if copyable {
+                    crate::shell::chrome_button(
+                        crate::glyph::Icon::Export,
+                        "Copy".to_owned(),
+                        Message::Copy(owned.clone()),
+                        s,
+                    )
+                } else {
+                    iced::widget::space().width(Length::Shrink).into()
+                },
+                if copyable {
+                    crate::shell::chrome_button(
+                        crate::glyph::Icon::Search,
+                        "Reveal".to_owned(),
+                        Message::Reveal(owned),
+                        s,
+                    )
+                } else {
+                    iced::widget::space().width(Length::Shrink).into()
+                },
+            ]
+            .spacing(s.pad(space::BASE))
+            .align_y(iced::Alignment::Center),
+        );
+    }
+
+    container(fields)
+        .style(theme::region(Region::Panel, p))
+        .padding(s.pad(space::WIDE))
+        .width(Length::Fill)
+        .into()
+}
+
+/// The five local tabs, under the identity they all describe.
+pub fn tabs<'a>(current: Tab, s: Style) -> Element<'a, Message> {
+    let p = s.palette;
+    let mut bar = iced::widget::Row::new().spacing(s.pad(space::LOOSE));
+    for tab in Tab::ALL {
+        let chosen = tab == current;
+        bar = bar.push(
+            button(
+                column![
+                    text(tab.label())
+                        .font(if chosen { theme::STRONG } else { theme::TEXT })
+                        .size(s.type_size(size::LABEL))
+                        .color(if chosen { p.text } else { p.muted }),
+                    container(iced::widget::space())
+                        .width(Length::Fill)
+                        .height(Length::Fixed(2.0))
+                        .style(move |_| container::Style {
+                            background: Some(
+                                if chosen {
+                                    p.accent
+                                } else {
+                                    iced::Color::TRANSPARENT
+                                }
+                                .into()
+                            ),
+                            ..container::Style::default()
+                        }),
+                ]
+                .spacing(s.pad(space::SNUG)),
+            )
+            .on_press(Message::ShowTab(tab))
+            .padding(0)
+            .style(move |_, status| button::Style {
+                background: None,
+                text_color: if matches!(status, button::Status::Hovered) {
+                    p.text
+                } else {
+                    p.muted
+                },
+                ..button::Style::default()
+            }),
+        );
+    }
+
+    container(
+        column![
+            scrollable(bar).horizontal().width(Length::Fill),
+            container(iced::widget::space())
+                .width(Length::Fill)
+                .height(Length::Fixed(1.0))
+                .style(move |_| container::Style {
+                    background: Some(p.border.into()),
+                    ..container::Style::default()
+                }),
+        ]
+        .spacing(0),
+    )
+    .padding([0.0, s.pad(space::LOOSE)])
+    .width(Length::Fill)
+    .into()
+}
+
+/// Where an investigation starts: the score, what produced it, and the two
+/// questions an operator asks next.
 ///
-/// The path is given a bounded share and the button a fixed one, so an
-/// executable path long enough to fill the window cannot push the control off
-/// the edge. That happened, and a Stop button that cannot be reached is worse
-/// than no Stop button, because the interface still claims to offer it.
-// One row of labelled fields and a control. Same reasoning as the dialog.
+/// The score is secondary to what produced it, and it is never presented as a
+/// probability of compromise. Everything stated here comes from a field the
+/// report actually carries; nothing is inferred.
+// One reading surface, assembled top to bottom. Splitting it into helpers would
+// scatter the page's order across the file without making any part clearer.
 #[allow(clippy::too_many_lines)]
-pub fn detail(agent: &Agent, s: Style) -> Element<'_, Message> {
+pub fn overview<'a>(report: &'a Report, agent: &'a Agent, s: Style) -> Element<'a, Message> {
+    let p = s.palette;
+    let tint = p.grade(&agent.grade);
+    let credentials = agent
+        .resources
+        .iter()
+        .filter(|r| r.credential_in_reach())
+        .count();
+    let reads = agent
+        .resources
+        .iter()
+        .filter(|r| r.credential_read())
+        .count();
+    let endpoints = report
+        .network
+        .iter()
+        .filter(|e| e.agent_pid == agent.pid)
+        .count();
+    let headline = agent
+        .factors
+        .iter()
+        .max_by_key(|f| f.points)
+        .map_or_else(|| "No findings.".to_owned(), |f| f.title.clone());
+
+    let interpretation = column![
+        text(headline)
+            .font(theme::STRONG)
+            .size(s.type_size(size::SUBJECT))
+            .color(p.text),
+        text(format!(
+            "{} findings \u{b7} {} credential {} in reach \u{b7} {} read",
+            agent.factors.len(),
+            credentials,
+            if credentials == 1 { "path" } else { "paths" },
+            reads,
+        ))
+        .size(s.type_size(size::READING))
+        .color(p.muted),
+    ]
+    .spacing(s.pad(space::BASE));
+
+    let score = column![
+        text(agent.score.to_string())
+            .font(theme::MONO)
+            .size(s.type_size(size::SCORE))
+            .color(tint),
+        text(agent.grade.to_ascii_uppercase())
+            .font(theme::STRONG)
+            .size(s.type_size(size::MICRO))
+            .color(tint),
+    ]
+    .spacing(s.pad(space::HAIR))
+    .width(Length::Fixed(96.0));
+
+    let mut body = Column::new()
+        .spacing(s.pad(space::LOOSE))
+        .padding([s.pad(space::LOOSE), s.pad(space::LOOSE)])
+        .push(
+            row![score, interpretation]
+                .spacing(s.pad(space::BASE))
+                .align_y(iced::Alignment::Start),
+        )
+        .push(
+            row![
+                text("Why this score")
+                    .font(theme::STRONG)
+                    .size(s.type_size(size::SECTION))
+                    .color(p.text),
+                iced::widget::space().width(Length::Fill),
+                text(format!(
+                    "{} factors · deterministic rules",
+                    agent.factors.len()
+                ))
+                .size(s.type_size(size::MICRO))
+                .color(p.faint),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+
+    if agent.factors.is_empty() {
+        body = body.push(
+            text("No findings.")
+                .size(s.type_size(size::READING))
+                .color(p.muted),
+        );
+    } else {
+        let mut ordered: Vec<_> = agent.factors.iter().collect();
+        ordered.sort_by_key(|f| std::cmp::Reverse(f.points));
+        let mut list = Column::new().spacing(0.0);
+        for factor in ordered {
+            list = list.push(factor_row(factor, tint, s));
+        }
+        body = body.push(list);
+    }
+
+    body = body.push(
+        row![
+            question(
+                "What could be exposed?",
+                format!(
+                    "{credentials} credential paths · {} descendants · {} agents it can invoke",
+                    agent.children.len(),
+                    agent.invokes.len()
+                ),
+                "Potential access only.",
+                "Explore blast radius",
+                Message::ShowTab(Tab::Blast),
+                s,
+            ),
+            question(
+                "What has it actually done?",
+                format!("{endpoints} observed endpoints · {reads} observed credential reads"),
+                "A dash means no sensor recorded it.",
+                "Follow the activity",
+                Message::ShowTab(Tab::Activity),
+                s,
+            ),
+        ]
+        .spacing(s.pad(space::WIDE)),
+    );
+
+    scrollable(body)
+        .height(Length::Fill)
+        .width(Length::Fill)
+        .into()
+}
+
+/// One scored finding: what it is worth, what it says, and where it came from.
+fn factor_row(factor: &crate::report::Factor, tint: iced::Color, s: Style) -> Element<'_, Message> {
+    let p = s.palette;
+    container(
+        row![
+            text(format!("+{}", factor.points))
+                .font(theme::MONO)
+                .size(s.type_size(size::EMPHASIS))
+                .color(tint)
+                .width(Length::Fixed(48.0)),
+            column![
+                text(factor.title.as_str())
+                    .font(theme::STRONG)
+                    .size(s.type_size(size::READING))
+                    .color(p.text),
+                text(factor.source.as_str())
+                    .size(s.type_size(size::MICRO))
+                    .color(p.faint),
+            ]
+            .spacing(s.pad(space::TIGHT))
+            .width(Length::Fill),
+        ]
+        .spacing(s.pad(space::BASE))
+        .align_y(iced::Alignment::Start),
+    )
+    .style(move |_| container::Style {
+        border: iced::Border {
+            color: p.border,
+            width: 0.0,
+            radius: 0.0.into(),
+        },
+        background: None,
+        ..container::Style::default()
+    })
+    .padding([s.pad(space::BASE), 0.0])
+    .width(Length::Fill)
+    .into()
+}
+
+/// One of the two questions an overview answers, with the control that takes
+/// the reader to the evidence behind it.
+fn question<'a>(
+    title: &'a str,
+    counts: String,
+    caveat: &'a str,
+    action: &'a str,
+    message: Message,
+    s: Style,
+) -> Element<'a, Message> {
+    let p = s.palette;
+    container(
+        column![
+            text(title)
+                .font(theme::STRONG)
+                .size(s.type_size(size::EMPHASIS))
+                .color(p.text),
+            text(counts)
+                .size(s.type_size(size::EMPHASIS))
+                .color(p.muted),
+            text(caveat).size(s.type_size(size::MICRO)).color(p.faint),
+            button(
+                row![
+                    text(action)
+                        .size(s.type_size(size::EMPHASIS))
+                        .color(p.accent),
+                    crate::glyph::view(
+                        crate::glyph::Icon::Chevron,
+                        s.type_size(size::BODY),
+                        p.accent
+                    ),
+                ]
+                .spacing(s.pad(space::TIGHT))
+                .align_y(iced::Alignment::Center),
+            )
+            .on_press(message)
+            .padding(0)
+            .style(|_, _| button::Style {
+                background: None,
+                ..button::Style::default()
+            }),
+        ]
+        .spacing(s.pad(space::SNUG)),
+    )
+    .style(theme::region(Region::Panel, p))
+    .padding(s.pad(space::WIDE))
+    .width(Length::FillPortion(1))
+    .into()
+}
+
+/// Stop, beside the identity it applies to.
+///
+/// Outlined rather than filled: it has to be found without hunting and must not
+/// be the loudest thing on the screen.
+fn stop_button<'a>(pid: u32, s: Style) -> Element<'a, Message> {
+    let p = s.palette;
+    button(
+        text("Stop")
+            .font(theme::STRONG)
+            .size(s.type_size(size::EMPHASIS))
+            .color(p.critical),
+    )
+    .on_press(Message::AskStop(pid))
+    .padding([s.pad(space::TIGHT), s.pad(space::SNUG)])
+    .style(move |_, status| button::Style {
+        background: Some(
+            if matches!(status, button::Status::Hovered) {
+                iced::Color {
+                    a: 0.16,
+                    ..p.critical
+                }
+            } else {
+                iced::Color::TRANSPARENT
+            }
+            .into(),
+        ),
+        text_color: p.critical,
+        border: iced::Border {
+            color: p.critical,
+            width: 1.0,
+            radius: theme::radius::CONTROL.into(),
+        },
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// The selected agent, anchored at the bottom of the window.
+///
+/// Selection changes this strip immediately, so the operator can scan the
+/// list and keep process identity, model, executable, and the stop action in
+/// one stable place. The full record remains available without moving the
+/// destructive action away from the process it applies to.
+#[allow(clippy::too_many_lines)]
+pub fn selected_footer(agent: &Agent, inspecting: bool, s: Style) -> Element<'_, Message> {
     let p = s.palette;
     let grade_tint = p.grade(&agent.grade);
     let grade = format!("{} {}", agent.grade.to_ascii_uppercase(), agent.score);
-
     let user = agent.user.clone().unwrap_or_else(|| "unknown".into());
     let executable = agent
         .exe
         .clone()
         .unwrap_or_else(|| "executable not readable".into());
 
-    let body = row![
-        container(iced::widget::space())
-            .width(Length::Fixed(4.0))
-            .height(Length::Fixed(48.0))
-            .style(move |_| iced::widget::container::Style {
-                background: Some(grade_tint.into()),
-                ..iced::widget::container::Style::default()
-            }),
+    let field = |label: &'static str, value: String, width: Length, mono: bool| {
         container(
             column![
-                text("SELECTED AGENT")
+                text(label)
                     .font(theme::STRONG)
                     .size(s.type_size(size::BODY))
                     .color(p.faint),
-                row![
-                    text(agent.label())
-                        .font(theme::STRONG)
-                        .size(s.type_size(size::DISPLAY))
-                        .color(p.text),
-                    container(
-                        text(grade)
-                            .font(theme::STRONG)
-                            .size(s.type_size(size::BODY))
-                            .color(grade_tint)
-                    )
-                    .style(move |_| iced::widget::container::Style {
-                        background: Some(p.raised.into()),
-                        border: iced::Border {
-                            color: grade_tint,
-                            width: 1.0,
-                            radius: theme::radius::CONTROL.into(),
-                        },
-                        ..iced::widget::container::Style::default()
-                    })
-                    .padding([s.pad(space::HAIR), s.pad(space::SNUG)]),
-                ]
-                .spacing(s.pad(space::SNUG))
-                .align_y(iced::Alignment::Center),
-            ]
-            .spacing(s.pad(space::HAIR)),
-        )
-        .width(Length::Fixed(224.0))
-        .clip(true),
-        container(
-            column![
-                text("PROCESS")
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::BODY))
-                    .color(p.faint),
-                text(format!(
-                    "PID {} · {} · {}",
-                    agent.pid,
-                    user,
-                    crate::clock::stamp(agent.started_at)
-                ))
-                .wrapping(iced::widget::text::Wrapping::None)
-                .font(theme::MONO)
-                .size(s.type_size(size::BODY))
-                .color(p.text),
-            ]
-            .spacing(s.pad(space::TIGHT)),
-        )
-        .width(Length::Fixed(240.0))
-        .clip(true),
-        container(
-            column![
-                text("MODEL")
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::BODY))
-                    .color(p.faint),
-                text(
-                    agent
-                        .model
-                        .clone()
-                        .unwrap_or_else(|| "no model named in this agent's own files".into())
-                )
-                .wrapping(iced::widget::text::Wrapping::None)
-                .font(theme::MONO)
-                .size(s.type_size(size::BODY))
-                .color(p.muted),
-            ]
-            .spacing(s.pad(space::TIGHT)),
-        )
-        .width(Length::Fixed(200.0))
-        .clip(true),
-        container(
-            column![
-                text("EXECUTABLE")
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::BODY))
-                    .color(p.faint),
-                text(executable)
+                text(value)
                     .wrapping(iced::widget::text::Wrapping::None)
-                    .font(theme::MONO)
+                    .font(if mono { theme::MONO } else { theme::TEXT })
                     .size(s.type_size(size::BODY))
                     .color(p.muted),
             ]
             .spacing(s.pad(space::TIGHT)),
         )
-        .width(Length::Fill)
-        .clip(true),
-        container(stop_button(agent.pid, s)).width(Length::Shrink),
+        .width(width)
+        .clip(true)
+    };
+
+    let selected = container(
+        column![
+            text("SELECTED AGENT")
+                .font(theme::STRONG)
+                .size(s.type_size(size::BODY))
+                .color(p.faint),
+            row![
+                text(agent.label())
+                    .font(theme::STRONG)
+                    .size(s.type_size(size::DISPLAY))
+                    .color(p.text),
+                container(
+                    text(grade)
+                        .font(theme::STRONG)
+                        .size(s.type_size(size::BODY))
+                        .color(grade_tint),
+                )
+                .style(move |_| container::Style {
+                    background: Some(p.raised.into()),
+                    border: iced::Border {
+                        color: grade_tint,
+                        width: 1.0,
+                        radius: theme::radius::CONTROL.into(),
+                    },
+                    ..container::Style::default()
+                })
+                .padding([s.pad(space::HAIR), s.pad(space::SNUG)]),
+            ]
+            .spacing(s.pad(space::SNUG))
+            .align_y(iced::Alignment::Center),
+        ]
+        .spacing(s.pad(space::HAIR)),
+    )
+    .width(Length::Fixed(224.0))
+    .clip(true);
+
+    let body = row![
+        container(iced::widget::space())
+            .width(Length::Fixed(4.0))
+            .height(Length::Fixed(48.0))
+            .style(move |_| container::Style {
+                background: Some(grade_tint.into()),
+                ..container::Style::default()
+            }),
+        selected,
+        field(
+            "PROCESS",
+            format!(
+                "PID {} · {} · {}",
+                agent.pid,
+                user,
+                crate::clock::stamp(agent.started_at)
+            ),
+            Length::Fixed(240.0),
+            true,
+        ),
+        field("MODEL", agent.model_line(), Length::Fixed(200.0), true),
+        field("EXECUTABLE", executable, Length::Fill, true),
+        crate::shell::chrome_button(
+            crate::glyph::Icon::Info,
+            if inspecting { "Hide record" } else { "Record" }.to_owned(),
+            Message::ToggleInspector,
+            s,
+        ),
+        prominent_stop_button(agent.pid, s),
     ]
     .align_y(iced::Alignment::Center)
     .spacing(s.pad(space::BASE));
 
-    container(body)
+    let mut footer = Column::new().push(body);
+    if inspecting {
+        footer = footer.push(inspector(agent, s));
+    }
+    container(footer)
         .style(theme::region(Region::Chrome, p))
         .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
         .width(Length::Fill)
         .into()
 }
 
-fn stop_button<'a>(pid: u32, s: Style) -> Element<'a, Message> {
+/// The high-visibility stop action used in the selected-agent footer.
+fn prominent_stop_button<'a>(pid: u32, s: Style) -> Element<'a, Message> {
     let p = s.palette;
     button(
         text("Stop process")
@@ -741,160 +1050,6 @@ fn stop_button<'a>(pid: u32, s: Style) -> Element<'a, Message> {
     .into()
 }
 
-/// Where this came from and who wrote it.
-///
-/// Both links open in the reader's own browser. Nothing in this window fetches
-/// anything: a monitor that reaches the network to draw its own footer has a
-/// reason to be talking to a server, and it should not have one.
-pub fn footer<'a>(version: &str, status: Option<&'a str>, s: Style) -> Element<'a, Message> {
-    let p = s.palette;
-    let version = version.to_owned();
-    let provenance = row![
-        link(crate::glyph::Icon::Repository, "source", REPOSITORY, s),
-        text("·").size(s.type_size(size::MICRO)).color(p.border),
-        link(crate::glyph::Icon::Author, "made by farikonsec", AUTHOR, s),
-    ]
-    .spacing(s.pad(space::BASE))
-    .align_y(iced::Alignment::Center);
-
-    container(
-        row![
-            container(provenance).width(Length::FillPortion(2)),
-            container(footer_status(status, s))
-                .clip(true)
-                .width(Length::FillPortion(5)),
-            container(
-                text(format!("TOPGENT {version}"))
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::BODY))
-                    .color(p.faint),
-            )
-            .align_right(Length::Fill)
-            .width(Length::FillPortion(2)),
-        ]
-        .spacing(s.pad(space::BASE))
-        .align_y(iced::Alignment::Center),
-    )
-    .style(theme::region(Region::Chrome, p))
-    .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
-    .width(Length::Fill)
-    .into()
-}
-
-fn footer_status<'a>(status: Option<&'a str>, s: Style) -> Element<'a, Message> {
-    let p = s.palette;
-    let export = status.and_then(|value| value.strip_prefix("session written to "));
-    let view: Element<'a, Message> = if let Some(path) = export {
-        let path_owned = path.to_owned();
-        row![
-            text("EXPORT READY")
-                .font(theme::STRONG)
-                .size(s.type_size(size::BODY))
-                .color(p.accent),
-            text(table::shorten(path, 72, true))
-                .font(theme::MONO)
-                .size(s.type_size(size::BODY))
-                .color(p.text)
-                .wrapping(iced::widget::text::Wrapping::None)
-                .width(Length::Fill),
-            button(
-                text("Show file")
-                    .font(theme::STRONG)
-                    .size(s.type_size(size::BODY))
-                    .color(p.background),
-            )
-            .on_press(Message::Reveal(path_owned))
-            .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
-            .style(move |_, state| button::Style {
-                background: Some(
-                    if matches!(state, button::Status::Hovered) {
-                        p.text
-                    } else {
-                        p.accent
-                    }
-                    .into(),
-                ),
-                text_color: p.background,
-                border: iced::Border {
-                    color: iced::Color::TRANSPARENT,
-                    width: 0.0,
-                    radius: theme::radius::CONTROL.into(),
-                },
-                ..button::Style::default()
-            }),
-        ]
-        .spacing(s.pad(space::SNUG))
-        .align_y(iced::Alignment::Center)
-        .into()
-    } else {
-        text(status.unwrap_or("Monitoring locally · data stays on this host"))
-            .font(if status.is_some() {
-                theme::STRONG
-            } else {
-                theme::MONO
-            })
-            .size(s.type_size(size::BODY))
-            .color(if status.is_some() { p.accent } else { p.faint })
-            .wrapping(iced::widget::text::Wrapping::None)
-            .into()
-    };
-
-    container(view)
-        .style(move |_| iced::widget::container::Style {
-            background: Some(
-                if status.is_some() {
-                    p.selection()
-                } else {
-                    p.background
-                }
-                .into(),
-            ),
-            border: iced::Border {
-                color: if status.is_some() { p.accent } else { p.border },
-                width: 1.0,
-                radius: theme::radius::CONTROL.into(),
-            },
-            ..iced::widget::container::Style::default()
-        })
-        .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
-        .width(Length::Fill)
-        .into()
-}
-
-/// Where the source lives.
-pub const REPOSITORY: &str = "https://github.com/farikonsec/topgent";
-/// Who wrote it.
-pub const AUTHOR: &str = "https://github.com/farikonsec";
-
-fn link<'a>(
-    icon: crate::glyph::Icon,
-    label: &'a str,
-    url: &'a str,
-    s: Style,
-) -> Element<'a, Message> {
-    let p = s.palette;
-    button(
-        row![
-            crate::glyph::view(icon, s.type_size(size::BODY), p.faint),
-            text(label).size(s.type_size(size::BODY)).color(p.muted),
-        ]
-        .spacing(s.pad(space::TIGHT))
-        .align_y(iced::Alignment::Center),
-    )
-    .on_press(Message::Open(url.to_owned()))
-    .padding([s.pad(space::HAIR), s.pad(space::TIGHT)])
-    .style(move |_, status| button::Style {
-        background: None,
-        text_color: if matches!(status, button::Status::Hovered) {
-            p.accent
-        } else {
-            p.muted
-        },
-        ..button::Style::default()
-    })
-    .into()
-}
-
 /// What the last stop attempt said, above the interface until the next sweep.
 ///
 /// The core's own sentence, not a rewritten one. A stop that was refused says
@@ -903,7 +1058,7 @@ fn link<'a>(
 pub fn footnote<'a>(outcome: &str, s: Style) -> Element<'a, Message> {
     container(
         text(outcome.to_owned())
-            .size(s.type_size(size::BODY))
+            .size(s.type_size(size::EMPHASIS))
             .color(s.palette.text),
     )
     .style(theme::region(Region::Panel, s.palette))
@@ -921,26 +1076,34 @@ pub fn confirm_stop<'a>(pid: u32, agent: Option<&Agent>, s: Style) -> Element<'a
         || format!("pid {pid}"),
         |a| format!("{} (pid {})", a.label(), a.pid),
     );
+    let executable = agent
+        .and_then(|a| a.exe.clone())
+        .unwrap_or_else(|| "executable not readable on this host".to_owned());
     let body = column![
         text("Stop this agent?")
-            .size(s.type_size(size::HEADING))
+            .font(theme::STRONG)
+            .size(s.type_size(size::SECTION))
             .color(p.text),
-        text(named).size(s.type_size(size::BODY)).color(p.muted),
-        text(
-            "The process and everything it started are signalled, deepest first. \
-             The exact identity is rechecked at the moment of the signal, so a pid \
-             reused since this dialog opened is refused rather than stopped."
-        )
-        .size(s.type_size(size::MICRO))
-        .color(p.faint),
+        text(named).size(s.type_size(size::READING)).color(p.muted),
+        text(executable)
+            .font(theme::MONO)
+            .size(s.type_size(size::BODY))
+            .color(p.faint),
+        text("Stops the process and its children. A reused PID is refused.")
+            .size(s.type_size(size::MICRO))
+            .color(p.faint),
         row![
-            button(text("Cancel").size(s.type_size(size::BODY)).color(p.text))
-                .on_press(Message::CancelStop)
-                .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
-                .style(button::text),
+            button(
+                text("Cancel")
+                    .size(s.type_size(size::EMPHASIS))
+                    .color(p.text)
+            )
+            .on_press(Message::CancelStop)
+            .padding([s.pad(space::TIGHT), s.pad(space::BASE)])
+            .style(button::text),
             button(
                 text("Stop")
-                    .size(s.type_size(size::BODY))
+                    .size(s.type_size(size::EMPHASIS))
                     .color(p.background)
             )
             .on_press(Message::ConfirmStop(pid))
@@ -971,7 +1134,7 @@ pub fn confirm_stop<'a>(pid: u32, agent: Option<&Agent>, s: Style) -> Element<'a
         container(body)
             .style(theme::region(Region::Panel, p))
             .padding(s.pad(space::LOOSE))
-            .width(Length::Fixed(420.0)),
+            .width(Length::Fixed(460.0)),
     )
     .style(theme::region(Region::Scrim, p))
     .width(Length::Fill)
@@ -1014,31 +1177,61 @@ mod tests {
         assert_eq!(report.worst().map(|a| a.pid), Some(2));
     }
 
-    /// A heading that does not fit its own column is clipped, and a clipped
-    /// right-aligned heading loses its first letters: `SCORE` printed as
-    /// `CORE`. Every heading must fit the share its column is given.
+    /// The list is read top to bottom and clicked without looking twice. An
+    /// order that depends on anything but the score is an order that moves
+    /// under the pointer when a sweep lands.
     #[test]
-    fn every_heading_fits_the_column_it_labels() {
-        let total: f32 = f32::from(COLUMNS.iter().map(|c| c.portion).sum::<u16>());
-        // The narrowest window this is laid out for, less the gaps and padding
-        // the table takes out before sharing the width.
-        let usable = 1320.0 - 190.0 - 130.0 - 12.0 * 7.0 - 24.0;
-        for column in &COLUMNS {
-            let share = usable * f32::from(column.portion) / total;
-            let letters = u16::try_from(column.label.chars().count()).unwrap_or(u16::MAX);
-            let needed = f32::from(letters) * theme::size::MICRO * 0.66;
-            assert!(
-                share >= needed,
-                "{} needs {needed:.0}px and its column gives {share:.0}px",
-                column.label
-            );
-        }
+    fn the_list_is_worst_first_and_stable() {
+        let report = Report {
+            agents: vec![
+                agent(9, "LOW", 10),
+                agent(2, "CRITICAL", 90),
+                agent(1, "CRITICAL", 90),
+                agent(3, "MEDIUM", 40),
+            ],
+            ..Report::default()
+        };
+        let order: Vec<u32> = shortlist(&report, "", Scope::All)
+            .iter()
+            .map(|a| a.pid)
+            .collect();
+        assert_eq!(
+            order,
+            vec![1, 2, 3, 9],
+            "ties break on pid, not on order found"
+        );
     }
 
+    /// A filter that matched nothing but the name would hide the row an
+    /// operator has a pid for, which is the one case they come to the filter
+    /// with.
     #[test]
-    fn the_column_portions_add_up_to_the_width_they_claim() {
-        let total: u16 = COLUMNS.iter().map(|c| c.portion).sum();
-        assert_eq!(total, 33, "a changed portion must be deliberate");
+    fn the_filter_matches_a_pid_as_well_as_a_name() {
+        let report = Report {
+            agents: vec![agent(4242, "LOW", 10), agent(7, "LOW", 10)],
+            ..Report::default()
+        };
+        assert_eq!(shortlist(&report, "4242", Scope::All).len(), 1);
+        assert_eq!(shortlist(&report, "claude", Scope::All).len(), 2);
+        assert_eq!(shortlist(&report, "nothing here", Scope::All).len(), 0);
+    }
+
+    /// "Not evaluated" is not a band between low and clear. An agent nobody
+    /// scored has to be findable, because it is the one the scoring rules did
+    /// not reach.
+    #[test]
+    fn an_unscored_agent_has_a_scope_that_finds_it() {
+        let report = Report {
+            agents: vec![
+                agent(1, "CRITICAL", 90),
+                agent(2, "LOW", 5),
+                agent(3, "not evaluated", 0),
+            ],
+            ..Report::default()
+        };
+        assert_eq!(shortlist(&report, "", Scope::AtRisk).len(), 1);
+        assert_eq!(shortlist(&report, "", Scope::Unscored).len(), 1);
+        assert_eq!(shortlist(&report, "", Scope::All).len(), 3);
     }
 
     #[test]
@@ -1059,11 +1252,61 @@ mod tests {
     }
 
     #[test]
+    fn a_recognition_says_what_it_rests_on() {
+        let mut a = agent(1, "LOW", 0);
+        a.family = Some("claude-code".to_owned());
+        a.identity_evidence.strength = Some("name_only".to_owned());
+        a.identity_evidence.class = "suspected".to_owned();
+        assert_eq!(a.recognition(), "suspected agent · name only");
+        a.identity_evidence.strength = Some("known_install_path".to_owned());
+        a.identity_evidence.class = "known".to_owned();
+        assert_eq!(a.recognition(), "known agent · install path");
+        a.identity_evidence.strength = Some("active_extension".to_owned());
+        assert_eq!(a.recognition(), "known agent · active extension");
+        // A report from an older build carries no strength and is not
+        // upgraded to a claim it never made.
+        a.identity_evidence.class.clear();
+        a.identity_evidence.strength = None;
+        assert_eq!(a.recognition(), "recognised");
+    }
+
+    #[test]
+    fn a_model_says_whether_it_was_observed_or_declared_and_where() {
+        let mut a = agent(1, "LOW", 0);
+        a.model = Some("openai/gpt-5.6".to_owned());
+        assert_eq!(a.model_line(), "openai/gpt-5.6", "an older report");
+        assert!(a.model_provenance().contains("source not reported"));
+        a.model_evidence = Some(crate::report::ModelEvidence {
+            certainty: "declared".to_owned(),
+            source: "~/.codex/config.toml".to_owned(),
+            read: "the first 64 KB of the file; only the model name is kept".to_owned(),
+        });
+        assert_eq!(a.model_line(), "openai/gpt-5.6 · declared");
+        assert_eq!(
+            a.model_provenance(),
+            "declared in ~/.codex/config.toml; read the first 64 KB of the file; only the \
+             model name is kept"
+        );
+        a.model = None;
+        assert!(a.model_provenance().starts_with("not found"));
+    }
+
+    #[test]
     fn a_process_whose_executable_cannot_be_read_says_so_rather_than_guessing() {
         let mut a = agent(4242, "LOW", 0);
         a.family = None;
         a.exe = None;
         assert_eq!(a.label(), "pid 4242");
         assert_eq!(a.recognition(), "unreadable");
+    }
+
+    /// Every tab but the overview hands its drawing to a panel. A tab with no
+    /// panel and no drawing of its own is a tab that opens onto nothing.
+    #[test]
+    fn every_tab_draws_something() {
+        for tab in Tab::ALL {
+            assert!(!tab.label().is_empty());
+            assert_eq!(tab.panel().is_none(), matches!(tab, Tab::Overview));
+        }
     }
 }

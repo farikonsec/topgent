@@ -51,10 +51,10 @@ test("turning alerts off suppresses delivery and nothing else", () => {
 });
 
 test("a downgrade is worded as a reduction, not an escalation", () => {
-  assert.equal(ui.eventLabel(escalation), "Risk escalated");
-  assert.equal(ui.eventLabel(downgrade), "Risk reduced");
+  assert.equal(ui.eventLabel(escalation), "Risk raised");
+  assert.equal(ui.eventLabel(downgrade), "Risk lowered");
   assert.equal(ui.eventLabel(unknownMove), "Risk changed");
-  assert.equal(ui.eventLabel({ kind: "recon" }), "Scanning detected");
+  assert.equal(ui.eventLabel({ kind: "recon" }), "Network scanning");
   assert.equal(ui.eventLabel({ kind: "not a kind" }), "not a kind");
 });
 

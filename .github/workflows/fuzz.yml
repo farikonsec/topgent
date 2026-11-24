@@ -36,6 +36,10 @@ jobs:
           - netstat
           - audit
           - sockaddr
+          # What the collector reads from its own privileged helper, and
+          # what the helper reads from the probe's ring buffers.
+          - sensor_line
+          - ebpf_records
           # What is read off the host: agent configuration, the policy file,
           # and the report the CI gate is pointed at.
           - config
@@ -47,6 +51,8 @@ jobs:
           - text
           # What leaves the machine.
           - session_export
+          # What comes back in: a saved session, from wherever it was copied.
+          - session_file
     steps:
       - uses: actions/checkout@v7
 

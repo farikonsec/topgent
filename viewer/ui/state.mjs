@@ -8,7 +8,9 @@
 // renders whatever the next report says.
 
 import { $, el } from "./dom.mjs";
+import { agentName } from "./names.mjs";
 import {
+  eventLabel,
   isAlarming,
   recordNotified,
   shouldAnnounce,
@@ -19,13 +21,24 @@ import {
 
 export const DEFAULTS = {
   agentSort:{col:"score",dir:-1}, accessSort:{col:"path",dir:1}, eventSort:{col:"at",dir:-1}, activitySort:{col:"at",dir:1}, networkSort:{col:"last_seen",dir:-1}, coverageSort:{col:"state",dir:1}, assetSort:{col:"kind",dir:1},
-  riskFilter:"all", agentQuery:"", eventKind:"all", eventQuery:"", networkDirection:"all", networkQuery:"", assetKind:"all", assetQuery:"", openPanels:[], widths:{}
+  riskFilter:"all", agentQuery:"", eventKind:"all", eventQuery:"", networkDirection:"all", networkQuery:"", assetKind:"all", assetQuery:"", workspace:"incidents", agentTab:"overview", density:"normal", theme:"light", refreshMs:1500, widths:{}, mode:"simple", simplePage:"agents"
 };
-export const PANEL_VIEWS = [
-  ["risk","Risk explanation"], ["blast","Blast radius"], ["access","Access"],
-  ["events","Event log"], ["activity","Activity path"], ["network","Network activity"],
-  ["health","Sensor health"], ["response","Response & governance"],
-  ["context","Session context"], ["assets","Agents & assets"],
+export const WORKSPACES = [
+  ["incidents", "Incidents", "Open incidents.", "observe"],
+  ["agents", "Agents", "Running and stopped agents.", "observe"],
+  ["network", "Network", "Connections and listeners.", "observe"],
+  ["events", "Event log", "Security events, newest first.", "observe"],
+  ["behaviour", "Behaviour", "Runtime rule matches.", "observe"],
+  ["assets", "Assets", "AI assets and approval status.", "manage"],
+  ["response", "Rules & response", "Detection rules and response actions.", "manage"],
+  ["context", "Session context", "Agent-reported session data. Unverified.", "manage"],
+  ["health", "Coverage", "Sensor status and coverage.", "manage"],
+  ["settings", "Settings", "Theme, density, refresh, alerts.", "manage"],
+];
+export const AGENT_TABS = [
+  ["overview", "Overview"], ["access", "Access"], ["blast", "Blast radius"],
+  ["activity", "Activity"], ["network", "Network"], ["processes", "Processes"],
+  ["actions", "Actions"], ["files", "Files"], ["behaviour", "Behaviour"],
 ];
 export const view = load();
 function load() {
@@ -40,7 +53,9 @@ function load() {
       networkSort:saved.networkSort ?? DEFAULTS.networkSort,
       coverageSort:saved.coverageSort ?? DEFAULTS.coverageSort,
       assetSort:saved.assetSort ?? DEFAULTS.assetSort,
-      openPanels:Array.isArray(saved.openPanels) ? saved.openPanels.filter(id => PANEL_VIEWS.some(([known]) => known === id)) : [],
+      theme:["dark","light","high-contrast"].includes(saved.theme) ? saved.theme : DEFAULTS.theme,
+      workspace:WORKSPACES.some(([id]) => id === saved.workspace) ? saved.workspace : DEFAULTS.workspace,
+      agentTab:AGENT_TABS.some(([id]) => id === saved.agentTab) ? saved.agentTab : DEFAULTS.agentTab,
     };
   } catch { return { ...DEFAULTS }; }
 }
@@ -51,46 +66,69 @@ function load() {
  */
 export function resetView() {
   for (const key of Object.keys(view)) delete view[key];
-  Object.assign(view, structuredClone(DEFAULTS), { openPanels: [], widths: {} });
+  Object.assign(view, structuredClone(DEFAULTS), { widths: {} });
   save();
 }
 
 export function save() { try { localStorage.setItem("topgent.view", JSON.stringify(view)); } catch {} }
 
-export function applyPanelLayout(scrollTo) {
-  const open = new Set(view.openPanels ?? []);
-  for (const [id] of PANEL_VIEWS) $("panel-"+id).hidden = !open.has(id);
-  document.querySelectorAll("[data-panel-group]").forEach(group => {
-    const count = [...group.querySelectorAll(":scope > .panel")].filter(panel => !panel.hidden).length;
-    group.hidden = count === 0;
-    group.dataset.openCount = String(count);
-  });
+export function applyPanelLayout() {
+  document.querySelectorAll("[data-workspace-page]").forEach(page => page.hidden = page.dataset.workspacePage !== view.workspace);
+  document.querySelectorAll("[data-agent-tab]").forEach(panel => panel.hidden = panel.dataset.agentTab !== view.agentTab);
+  const current = WORKSPACES.find(([id]) => id === view.workspace) ?? WORKSPACES[0];
+  $("workspaceTitle").textContent = current[1];
+  $("workspaceDescription").textContent = current[2];
   renderViewNav();
-  if (scrollTo && open.has(scrollTo)) requestAnimationFrame(() => $("panel-"+scrollTo)?.scrollIntoView({behavior:"smooth",block:"start"}));
 }
 
-export function setPanelOpen(id, shouldOpen, scroll = false) {
-  const open = new Set(view.openPanels ?? []);
-  if (shouldOpen) open.add(id); else open.delete(id);
-  view.openPanels = PANEL_VIEWS.map(([known]) => known).filter(known => open.has(known));
-  save(); applyPanelLayout(scroll ? id : null);
+/** Open a workspace, as a sidebar link or a metric does. */
+export function go(workspace) { choose("workspace", workspace); }
+
+function choose(kind, id) {
+  view[kind] = id;
+  save();
+  applyPanelLayout();
+  document.dispatchEvent(new CustomEvent("topgent-view-change"));
 }
 
 export function renderViewNav() {
-  const host = $("viewNav"); host.replaceChildren();
-  host.append(el("button", { className:"view-link", disabled:true, ariaPressed:"true", title:"The primary Agents table is always visible" }, [
-    el("span", { className:"view-index", textContent:"00" }), el("span", { textContent:"Agents" }), el("span", { className:"view-state", textContent:"always" })
-  ]));
-  const open = new Set(view.openPanels ?? []);
-  PANEL_VIEWS.forEach(([id,label], index) => {
-    const active = open.has(id);
-    const button = el("button", { className:"view-link", ariaPressed:String(active), title:`${active?"Close":"Open"} ${label}` }, [
-      el("span", { className:"view-index", textContent:String(index+1).padStart(2,"0") }),
-      el("span", { textContent:label }), el("span", { className:"view-state", textContent:active?"open":"" })
-    ]);
-    button.onclick = () => setPanelOpen(id, !active, !active);
-    host.append(button);
-  });
+  for (const section of ["observe", "manage"]) {
+    const host = $(section+"Nav"); host.replaceChildren();
+    for (const [id, label, description, group] of WORKSPACES.filter(item => item[3] === section)) {
+      const active = id === view.workspace;
+      const button = el("button", { className:"view-link", ariaPressed:String(active), title:description }, [
+        el("span", { textContent:label }), el("span", { className:"view-state", textContent:workspaceTally(id) })
+      ]);
+      button.onclick = () => choose("workspace", id);
+      host.append(button);
+    }
+  }
+  const mobile = $("mobileWorkspace");
+  mobile.replaceChildren(...WORKSPACES.map(([id, label]) => el("option", {
+    value:id, textContent:label, selected:id === view.workspace,
+  })));
+  mobile.onchange = () => choose("workspace", mobile.value);
+  const tabs = $("agentTabs"); tabs.replaceChildren();
+  for (const [id, label] of AGENT_TABS) {
+    const button = el("button", { className:"agent-tab", ariaPressed:String(id === view.agentTab), textContent:label });
+    button.onclick = () => choose("agentTab", id);
+    tabs.append(button);
+  }
+}
+
+function workspaceTally(id) {
+  const report = session.data;
+  if (!report) return "";
+  if (id === "incidents") return String(report.incidents?.length ?? 0);
+  if (id === "agents") return String(report.agents?.length ?? 0);
+  if (id === "network") return String(report.network?.length ?? 0);
+  if (id === "events") return String(report.events?.length ?? 0);
+  if (id === "behaviour") return String(report.behaviour?.findings?.length ?? 0);
+  if (id === "assets") return String(report.assets?.length ?? 0);
+  if (id === "response") return String(report.watchlist?.length ?? 0);
+  if (id === "context") return report.context?.enabled ? String(report.context?.records?.length ?? 0) : "Off";
+  if (id === "health") return `${(report.coverage ?? []).filter(row => row.state === "available").length}/${report.coverage?.length ?? 0}`;
+  return "";
 }
 
 // ---- what the interface knows right now ----
@@ -124,26 +162,17 @@ export const session = {
    * after four seconds, eight after twenty. */
   sweeping: false,
   /** Event ids the operator has expanded. */
-  expandedEvents: new Set(),
   /** Event ids already seen, so an alarm fires once. */
   seenEvents: new Set(),
   /** False until the first scan lands; the first load never alarms. */
   primed: false,
   /** Whether outbound alerts are delivered at all. */
   alertsOn: (localStorage.getItem("topgent.sound") ?? "1") === "1",
-  /** The chosen colour scheme. */
-  theme: localStorage.getItem("topgent.theme") === "light" ? "light" : "dark",
 };
 
 // One switch over every outbound alert: sound, in-app toast and OS
 // notification. It deliberately does not touch the event log, the row
 // highlight or the response queue, which are retained evidence.
-export function applyTheme() {
-  document.documentElement.dataset.theme = session.theme;
-  const light = session.theme === "light";
-  $("themeBtn").setAttribute("aria-pressed", String(light));
-  $("themeBtn").textContent = light ? "☾ Dark mode" : "☀ Bright mode";
-}
 export function beep() {
   if (!session.alertsOn) return;
   try {
@@ -178,13 +207,67 @@ export function checkAlarms(now = Date.now()) {
   if (shouldAnnounce(announce, session.alertsOn)) {
     beep();
     const top = announce[0];
-    const label = top.kind === "recon" ? "Scanning detected" : top.kind === "credential_exposed" ? "Credential exposed" : top.kind === "behaviour" ? "Rogue behaviour" : top.kind === "model_drift" ? "Model drift" : "Risk escalated";
-    toast(`⚠ ${label}: ${top.agent} (pid ${top.pid})`);
-    notify(`Topgent — ${label}`, `${top.agent} (pid ${top.pid}) — ${top.detail}`);
+    const title = eventLabel(top);
+    const name = agentName({ family: top.agent });
+    const more = announce.length > 1 ? ` +${announce.length - 1}` : "";
+    toast(`${title} · ${name}${more}`, { tone: "bad", action: "Review", onAction: () => document.dispatchEvent(new CustomEvent("topgent-open-agent", { detail: top.pid })) });
+    notify(`Topgent: ${title}`, `${name}, PID ${top.pid}.`);
   }
   // Rows still highlight while alerts are off: suppressing delivery must not
   // suppress the finding.
   return alarms.map(a => a.pid);
 }
 
-export function toast(msg) { document.querySelectorAll(".toast").forEach(n=>n.remove()); const n=el("div",{className:"toast",textContent:msg}); document.body.append(n); setTimeout(()=>n.remove(),4500); }
+export function toast(msg, { tone, action, onAction } = {}) {
+  document.querySelectorAll(".toast").forEach(n => n.remove());
+  const n = el("div", { className: tone ? `toast toast-${tone}` : "toast", role: "status" }, [el("span", { textContent: msg })]);
+  if (action && onAction) {
+    const b = el("button", { className: "toast-action", type: "button", textContent: action });
+    b.onclick = () => { n.remove(); onAction(); };
+    n.append(b);
+  }
+  document.body.append(n);
+  setTimeout(() => n.remove(), action ? 8000 : 4500);
+}
+
+/** An agent by pid: a running one, else one that ended this session (the
+ *  report's `ended_agents`), as the desktop's `Report::find_agent`. */
+export function findAgent(pid) {
+  if (pid == null || !session.data) return undefined;
+  return (session.data.agents ?? []).find(a => a.pid === pid)
+    ?? (session.data.ended_agents ?? []).find(a => a.pid === pid);
+}
+
+/** Local time as the desktop's clock::stamp shows it: HH:MM:SS today, the
+ *  day and minute otherwise, so an old row cannot pass as recent. */
+export function stamp(ms) {
+  if (!ms) return "—";
+  const d = new Date(ms), now = new Date();
+  const two = n => String(n).padStart(2, "0");
+  return d.toDateString() === now.toDateString()
+    ? `${two(d.getHours())}:${two(d.getMinutes())}:${two(d.getSeconds())}`
+    : `${two(d.getDate())}/${two(d.getMonth()+1)} ${two(d.getHours())}:${two(d.getMinutes())}`;
+}
+
+/** A model's name without its route, as the desktop's `short_model`:
+ *  `openrouter/z-ai/glm-4.7-flash` is `glm-4.7-flash`. */
+export function shortModel(model) {
+  return String(model ?? "").split("/").pop().trim();
+}
+
+/** An agent and the model it runs on, as a column names it: `opencode ·
+ *  glm-4.7-flash`, or the family alone when no model was read. */
+export function agentWithModel(agent) {
+  const name = agent.family || "unrecognised";
+  const model = shortModel(agent.model);
+  return model ? `${name} · ${model}` : name;
+}
+
+/** What a row that names an agent by family calls it: the run (its pid,
+ *  and its start when the row knows it) with its model when this report has
+ *  it, else the family the row gave. As the desktop's `Report::run_name`. */
+export function runName(pid, startedAt, family) {
+  const run = [...(session.data?.agents ?? []), ...(session.data?.ended_agents ?? [])]
+    .find(a => a.pid === pid && (startedAt == null || a.started_at === startedAt));
+  return run ? agentWithModel(run) : (family || "agent");
+}

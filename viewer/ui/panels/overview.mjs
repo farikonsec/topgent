@@ -1,18 +1,37 @@
-// The four numbers across the top.
-//
-// A summary for someone deciding where to look first, never the evidence.
+// The four figures across the top, as the desktop draws them (shell.rs,
+// `metrics`): the counts an operator checks before deciding where to look.
+// Each is a button that opens where the evidence behind it is.
 
-import { identityName } from "../alerts.mjs";
-import { $, ROGUE_CODES } from "../dom.mjs";
-import { session } from "../state.mjs";
+import { $ } from "../dom.mjs";
+import { go, session } from "../state.mjs";
+import { incidentTime } from "./incidents.mjs";
+
+/** Credential files an agent was observed reading, as the desktop counts. */
+export function credentialReads(agents) {
+  return agents.flatMap(a => a.resources ?? []).filter(r => r.sensitive && r.observed === "yes").length;
+}
 
 export function renderOverview() {
-  const critical = session.data.agents.filter(a=>a.grade==="CRITICAL").length;
-  const signals = session.data.agents.reduce((n,a)=>n+a.factors.filter(f=>ROGUE_CODES.has(f.code)).length,0);
-  const top = [...session.data.agents].sort((a,b)=>b.score-a.score)[0];
-  $("railCritical").textContent = critical; $("railSignals").textContent = signals;
-  $("railEstate").textContent = session.data.agents.length; $("railEstateNote").textContent = `${session.data.fact_count} evidence points`;
-  $("posture").textContent = critical ? `${critical} critical agent${critical>1?"s":""}` : signals ? `${signals} active signal${signals>1?"s":""}` : "No active rogue signal";
-  $("posture").style.color = critical ? "var(--crit)" : signals ? "var(--high)" : "var(--low)";
-  $("postureNote").textContent = top ? `Highest: ${identityName(top)} · ${top.score}/100` : "Metadata only · no traffic decryption";
+  const agents = session.data.agents ?? [];
+  const critical = agents.filter(a => String(a.grade).toUpperCase() === "CRITICAL").length;
+  const endpoints = (session.data.network ?? []).length;
+  const reads = credentialReads(agents);
+  const set = (id, value, tone) => {
+    $(id).textContent = String(value);
+    $(id).style.color = tone;
+  };
+  set("metricAgents", agents.length, "var(--tx)");
+  set("metricCritical", critical, critical ? "var(--crit)" : "var(--tx2)");
+  set("metricEndpoints", endpoints, endpoints ? "var(--tx)" : "var(--tx2)");
+  set("metricReads", reads, reads ? "var(--crit)" : "var(--tx2)");
+  // Incidents, with the most recent one's time as the note.
+  const incidents = session.data.incidents ?? [];
+  const anyCrit = incidents.some(i => String(i.severity).toLowerCase() === "critical");
+  const newest = incidents.reduce((best, i) => Math.max(best, i.first_seen ?? i.first_at ?? 0), 0);
+  set("metricIncidents", incidents.length, incidents.length ? (anyCrit ? "var(--crit)" : "var(--high)") : "var(--tx2)");
+  const note = $("metricIncidentsNote");
+  if (note) note.textContent = newest ? `latest ${incidentTime({ first_seen: newest })}` : "Open";
+  for (const button of document.querySelectorAll(".threat-rail [data-go]")) {
+    button.onclick = () => go(button.dataset.go);
+  }
 }

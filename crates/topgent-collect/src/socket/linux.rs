@@ -24,6 +24,8 @@ pub fn parse_ss(out: &str) -> Vec<SocketRow> {
     // `ss -i` prints each socket's kernel counters on the following indented
     // line, so a continuation belongs to the rows the previous line produced.
     let mut previous = 0_usize..0_usize;
+    // The local end of each row, kept beside it until every listener is known.
+    let mut locals: Vec<(String, u16)> = Vec::new();
     for line in out.lines() {
         if line.starts_with([' ', '\t']) {
             if let Some(bytes) = tcp_info_bytes(line) {
@@ -56,6 +58,10 @@ pub fn parse_ss(out: &str) -> Vec<SocketRow> {
         if host.is_empty() {
             continue;
         }
+        let local_end = local
+            .rsplit_once(':')
+            .and_then(|(h, p)| Some((h.trim_matches(['[', ']']).to_owned(), p.parse().ok()?)))
+            .unwrap_or_default();
 
         // A row can name more than one owning process. Parse only decimal
         // digits immediately following a literal `pid=` marker; everything
@@ -78,10 +84,23 @@ pub fn parse_ss(out: &str) -> Vec<SocketRow> {
                     port,
                     direction,
                 });
+                locals.push(local_end.clone());
             }
             rest = after.get(digits.len()..).unwrap_or_default();
         }
         previous = started..rows.len();
+    }
+    let listeners: Vec<(String, u16)> = rows
+        .iter()
+        .filter(|row| row.direction == Direction::Listening)
+        .map(|row| (row.host.clone(), row.port))
+        .collect();
+    for (row, (host, port)) in rows.iter_mut().zip(&locals) {
+        if row.direction == Direction::Outbound
+            && super::accepted::arrived_on(host, *port, &listeners)
+        {
+            row.direction = Direction::Inbound;
+        }
     }
     rows
 }
@@ -137,6 +156,26 @@ TIME-WAIT 0 0 127.0.0.1:1 127.0.0.1:2 users:((\"old\",pid=9,fd=1))
         assert_eq!(rows[1].direction, Direction::Outbound);
         assert_eq!(rows[2].host, "2606:4700::1");
         assert_eq!(rows[3].pid, 4001);
+    }
+
+    /// A server `ss` lists as listening on 8080, the connection it accepted,
+    /// and the client end of the same connection.
+    #[test]
+    fn a_connection_accepted_on_a_listening_port_is_inbound() {
+        let text = "\
+LISTEN 0 511 *:8080 *:* users:((\"python3\",pid=50,fd=3))
+ESTAB 0 0 [::ffff:127.0.0.1]:8080 [::ffff:127.0.0.1]:50000 users:((\"python3\",pid=50,fd=4))
+ESTAB 0 0 127.0.0.1:50000 127.0.0.1:8080 users:((\"curl\",pid=60,fd=5))
+";
+        let rows = parse_ss(text);
+        assert_eq!(rows.len(), 3, "{rows:#?}");
+        assert_eq!(rows[1].direction, Direction::Inbound);
+        assert_eq!(
+            (rows[1].host.as_str(), rows[1].port),
+            ("::ffff:127.0.0.1", 50000)
+        );
+        assert_eq!(rows[2].direction, Direction::Outbound);
+        assert_eq!(rows[2].port, 8080);
     }
 
     #[test]

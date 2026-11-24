@@ -64,3 +64,36 @@ pub(crate) fn bounded_metadata(input: &str, max: usize) -> String {
     }
     value
 }
+
+/// Sanitise one executable path without treating the path itself as a secret.
+///
+/// This is deliberately narrower than [`sanitize`]: callers must already have
+/// separated the executable from its arguments. Arguments still pass through
+/// the redacting sanitizer; only the program path is retained for process
+/// identity and history.
+pub(crate) fn program_path(input: &str, max: usize) -> String {
+    bounded_metadata(input, max)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{program_path, sanitize};
+
+    #[test]
+    fn executable_paths_survive_but_command_arguments_do_not() {
+        assert_eq!(
+            program_path("/usr/local/bin/python3", 255),
+            "/usr/local/bin/python3"
+        );
+        assert_eq!(
+            sanitize("/usr/local/bin/python3 --token=secret", 255),
+            "[REDACTED] [REDACTED]"
+        );
+    }
+
+    #[test]
+    fn executable_paths_cannot_store_controls_or_unbounded_text() {
+        assert_eq!(program_path("/tmp/a\nname", 255), "/tmp/a name");
+        assert_eq!(program_path("/very/long/path", 8), "/very/l…");
+    }
+}

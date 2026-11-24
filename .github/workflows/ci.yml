@@ -46,7 +46,7 @@ jobs:
         run: |
           set -eu
           node --check viewer/serve.mjs
-          node --test viewer/alerts.test.mjs
+          node --test viewer/*.test.mjs
       - name: Exercise report, health and AI-BOM surfaces
         shell: bash
         run: |
@@ -87,6 +87,44 @@ jobs:
           check_exit 1 violation
           check_exit 3 incomplete
           check_exit 2 error
+
+  # The eBPF probe, on Linux x86-64: built with its pinned nightly and
+  # bpf-linker, linted, and its root-only tests run under sudo, which hosted
+  # runners allow. The lab VM is arm64, so this is where the x86-64 syscall
+  # table and a second kernel are exercised (docs/ebpf/PLAN.md, E6).
+  ebpf:
+    name: eBPF probe (Linux x86-64)
+    runs-on: ubuntu-latest
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      FEATURES: topgent-sensor/ebpf,topgent-ebpf/probe
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      # The nightly the probe pins, and LLVM of the same major for bpf-linker.
+      # Move them together (crates/topgent-ebpf-probe/rust-toolchain.toml).
+      - name: Probe toolchain
+        run: |
+          set -eu
+          rustup toolchain install nightly-2026-07-01 --profile minimal --component rust-src
+          rustc +nightly-2026-07-01 -vV | grep 'LLVM version: 22'
+          curl -fsSL https://apt.llvm.org/llvm.sh -o llvm.sh
+          sudo bash llvm.sh 22
+          sudo apt-get install -y llvm-22-dev libpolly-22-dev libzstd-dev zlib1g-dev bpftool
+          PATH=/usr/lib/llvm-22/bin:$PATH cargo install bpf-linker@0.11.1 --locked --no-default-features --features llvm-22
+      - uses: Swatinem/rust-cache@v2.9.2
+      - run: cargo clippy --workspace --all-targets --locked --features "$FEATURES" -- -D warnings
+      - run: cargo test --workspace --locked --features "$FEATURES"
+      - name: Root-only probe tests
+        run: |
+          set -eu
+          for test in load events syscalls; do
+            binary=$(cargo test -p topgent-ebpf --features probe --test "$test" --no-run --locked \
+              --message-format=json | jq -r 'select(.executable != null) | .executable')
+            sudo "$binary" --ignored --nocapture
+          done
 
   # The floor the README promises. Build and test only: Clippy's lint set moves
   # between releases, and failing the oldest supported compiler over a lint that

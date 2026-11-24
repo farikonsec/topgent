@@ -208,10 +208,7 @@ pub fn from_wire(batch: &Batch) -> Option<Drained> {
 
 /// The stable spelling of a direction.
 const fn direction_str(direction: Direction) -> &'static str {
-    match direction {
-        Direction::Outbound => "outbound",
-        Direction::Listening => "listening",
-    }
+    direction.as_str()
 }
 
 /// The direction a spelling names, or nothing.
@@ -219,6 +216,7 @@ fn direction_of(text: &str) -> Option<Direction> {
     match text {
         "outbound" => Some(Direction::Outbound),
         "listening" => Some(Direction::Listening),
+        "inbound" => Some(Direction::Inbound),
         _ => None,
     }
 }

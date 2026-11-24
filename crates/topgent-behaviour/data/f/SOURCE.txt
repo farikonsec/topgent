@@ -1,0 +1,15 @@
+The F rule catalogue, vendored verbatim. Do not edit these files: regenerate
+catalogue.json with scripts/f-catalogue.py and re-pin the hashes below.
+
+Upstream: https://github.com/falcosecurity/rules
+Commit:   e822409d8a2a28c9719f56ace66e8cadebfd2bc3
+Licence:  Apache License 2.0, see LICENSE in this directory.
+
+stable.yaml      rules/falco_rules.yaml
+incubating.yaml  rules/falco-incubating_rules.yaml
+sandbox.yaml     rules/falco-sandbox_rules.yaml
+
+SHA-256
+30a1a60263ab97650c851011468da03b17fc0096a7cfa3b6686eba5de73b865b  stable.yaml
+47bf87041e2f39ca336e7acf1ae4e6183771a92e81031f367d01f2b49cabe1ac  incubating.yaml
+f05ad34f07c43930932ea6dd84c08a37bc8e5ba9f88901ca091ff1b52b3f33d3  sandbox.yaml

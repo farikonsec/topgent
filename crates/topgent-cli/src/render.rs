@@ -53,6 +53,7 @@ pub(crate) fn render(show_facts: bool) {
         );
     }
     println!();
+    println!("  {}", ink.heading("agents"));
 
     let mut ranked: Vec<&(Agent, Risk)> = scored.iter().collect();
     ranked.sort_by(|a, b| {
@@ -62,6 +63,7 @@ pub(crate) fn render(show_facts: bool) {
     });
 
     let columns = [
+        Column::number("#"),
         Column::text("AGENT"),
         Column::text("RISK"),
         Column::number("SCORE"),
@@ -72,9 +74,11 @@ pub(crate) fn render(show_facts: bool) {
     ];
     let rows: Vec<Vec<String>> = ranked
         .iter()
-        .map(|(agent, risk)| {
+        .enumerate()
+        .map(|(index, (agent, risk))| {
             vec![
-                ink.paint("1", &name(agent)),
+                (index + 1).to_string(),
+                name(agent),
                 ink.grade(risk.grade.label()),
                 // Coloured by the grade, not by its own text: the score is a
                 // number and matches no grade name, so colouring it by itself
@@ -99,29 +103,19 @@ pub(crate) fn render(show_facts: bool) {
     }
 
     if let Some((agent, risk)) = ranked.first() {
+        println!(
+            "  {} {} {}",
+            ink.heading("focus"),
+            ink.as_grade(risk.grade.label(), risk.grade.label()),
+            ink.faint(&format!("{} · score {}", name(agent), risk.score))
+        );
         print!("{}", why(agent, risk, ink));
     }
 
+    connections(ink);
+
     if show_facts {
-        println!("\n  {}\n", ink.heading("facts"));
-        let columns = [
-            Column::text("CLAIM"),
-            Column::text("SENSOR"),
-            Column::text("PROBE"),
-        ];
-        let rows: Vec<Vec<String>> = result
-            .facts
-            .iter()
-            .take(40)
-            .map(|f| {
-                vec![
-                    f.claim().kind().to_owned(),
-                    f.provenance().collector.clone(),
-                    ink.faint(&f.provenance().probe),
-                ]
-            })
-            .collect();
-        print!("{}", table(&columns, &rows, ink));
+        facts(&result.facts, ink);
     }
     println!();
 }
@@ -145,6 +139,81 @@ fn standing_state(agent: &Agent) -> String {
         0 => "-".to_owned(),
         1 => "1 agent extension active in a shared editor host".to_owned(),
         many => format!("{many} agent extensions active in a shared editor host"),
+    }
+}
+
+/// The first forty facts behind the report, for `--facts`.
+fn facts(facts: &[topgent_facts::Fact], ink: crate::style::Ink) {
+    println!("\n  {}\n", ink.heading("facts"));
+    let columns = [
+        Column::text("CLAIM"),
+        Column::text("SENSOR"),
+        Column::text("PROBE"),
+    ];
+    let rows: Vec<Vec<String>> = facts
+        .iter()
+        .take(40)
+        .map(|f| {
+            vec![
+                f.claim().kind().to_owned(),
+                f.provenance().collector.clone(),
+                ink.faint(&f.provenance().probe),
+            ]
+        })
+        .collect();
+    print!("{}", table(&columns, &rows, ink));
+}
+
+/// The retained network endpoints, at most thirty.
+fn connections(ink: crate::style::Ink) {
+    let network = Journal::open_default()
+        .network_history()
+        .unwrap_or_default();
+    println!("\n  {}", ink.heading("connections"));
+    if network.is_empty() {
+        println!(
+            "  {}",
+            ink.faint("No retained network endpoints were observed.")
+        );
+    } else {
+        let columns = [
+            Column::number("#"),
+            Column::text("AGENT"),
+            Column::text("DESTINATION"),
+            Column::number("PORT"),
+            Column::text("PROTO"),
+            Column::text("DIRECTION"),
+            Column::text("VERDICT"),
+            Column::text("STATE"),
+        ];
+        let rows: Vec<Vec<String>> = network
+            .iter()
+            .take(30)
+            .enumerate()
+            .map(|(i, record)| {
+                vec![
+                    (i + 1).to_string(),
+                    record.agent_family.clone(),
+                    record.host.clone(),
+                    record.port.to_string(),
+                    record.protocol.as_str().to_owned(),
+                    format!("{:?}", record.direction).to_lowercase(),
+                    record.verdict.as_str().to_owned(),
+                    if record.currently_observed {
+                        "active".to_owned()
+                    } else {
+                        "historical".to_owned()
+                    },
+                ]
+            })
+            .collect();
+        print!("{}", table(&columns, &rows, ink));
+        if network.len() > 30 {
+            println!(
+                "  {}",
+                ink.faint(&format!("{} more endpoints retained", network.len() - 30))
+            );
+        }
     }
 }
 

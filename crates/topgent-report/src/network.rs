@@ -59,6 +59,7 @@ pub(crate) fn network_json(
     records
         .iter()
         .map(|record| {
+            let owner = crate::ownership::of(&record.host);
             let extensions = agents
                 .iter()
                 .find(|agent| {
@@ -120,8 +121,11 @@ pub(crate) fn network_json(
                 "protocol": record.protocol.as_str(),
                 "peer_observable": peer_observable,
                 "host": record.host,
+                "country": owner.country(),
+                "network_owner": owner.network(),
+                "owner_known": owner.known(),
                 "port": record.port,
-                "direction": match record.direction { topgent_facts::Direction::Outbound => "outbound", topgent_facts::Direction::Listening => "listening" },
+                "direction": record.direction.as_str(),
                 "first_seen": record.first_seen,
                 "last_seen": record.last_seen,
                 "observations": record.observations,

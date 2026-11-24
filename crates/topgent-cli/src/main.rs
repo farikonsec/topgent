@@ -15,6 +15,7 @@ mod hooks;
 mod output;
 mod render;
 mod style;
+mod sweeps;
 
 pub(crate) const USAGE: &str = "\
 topgent - AI agent security monitor
@@ -24,7 +25,10 @@ topgent - AI agent security monitor
   topgent --watch          keep looking
   topgent doctor           which sensors work on this host
   topgent events           what changed
+  topgent incidents        what an agent did that you need to know, in sentences
+  topgent incidents --watch  keep sweeping and print each incident as it happens
   topgent stop <pid>       terminate a process, re-checking its identity first
+  topgent stop --number N  stop row N from the latest scan (add --yes to confirm)
 
   topgent --evidence-out PATH   write a signed evidence bundle for this sweep
   topgent replay <bundle>       score a bundle without touching the host
@@ -59,29 +63,8 @@ fn main() {
         return;
     }
 
-    // `stop` and `kill` are the same command, and `events` and `log` are the
-    // same command. Both pairs exist because people reach for either word.
-    if let Some(name) = args.first() {
-        let code = match name.as_str() {
-            "stop" | "kill" => Some(commands::stop::stop_command(&args)),
-            "events" | "log" => Some(commands::events::events_command(&args)),
-            "doctor" => Some(commands::doctor::doctor_command(&args)),
-            "evidence" => Some(commands::evidence::evidence_command(&args)),
-            "replay" => Some(commands::replay::replay_command(&args)),
-            "lab" => Some(commands::lab::lab_command(&args)),
-            "export" => Some(commands::export::export_command(&args)),
-            "policy" => Some(commands::policy::policy_command(&args)),
-            "rule" => Some(commands::rule::rule_command(&args)),
-            "asset" => Some(commands::asset::asset_command(&args)),
-            "context" => Some(commands::context::context_command(&args)),
-            "capture" => Some(commands::capture::capture_command(&args)),
-            "network" => Some(commands::network::network_command(&args)),
-            "approval" => Some(commands::approval::approval_command(&args)),
-            _ => None,
-        };
-        if let Some(code) = code {
-            std::process::exit(code);
-        }
+    if let Some(code) = subcommand(&args) {
+        std::process::exit(code);
     }
 
     // No subcommand: scan and print.
@@ -148,10 +131,37 @@ fn main() {
     }
 
     if json_out {
-        println!("{}", topgent_report::scan());
+        sweeps::print(&args, every);
         return;
     }
     render::render(show_facts);
+}
+
+/// Runs a named subcommand and returns its exit code, or nothing when the
+/// first argument names none.
+///
+/// `stop` and `kill` are the same command, and `events` and `log` are the
+/// same command. Both pairs exist because people reach for either word.
+fn subcommand(args: &[String]) -> Option<i32> {
+    match args.first()?.as_str() {
+        "stop" | "kill" => Some(commands::stop::stop_command(args)),
+        "events" | "log" => Some(commands::events::events_command(args)),
+        "incidents" => Some(commands::incidents::incidents_command(args)),
+        "doctor" => Some(commands::doctor::doctor_command(args)),
+        "evidence" => Some(commands::evidence::evidence_command(args)),
+        "replay" => Some(commands::replay::replay_command(args)),
+        "lab" => Some(commands::lab::lab_command(args)),
+        "export" => Some(commands::export::export_command(args)),
+        "policy" => Some(commands::policy::policy_command(args)),
+        "rule" => Some(commands::rule::rule_command(args)),
+        "honeytoken" => Some(commands::honeytoken::honeytoken_command(args)),
+        "asset" => Some(commands::asset::asset_command(args)),
+        "context" => Some(commands::context::context_command(args)),
+        "capture" => Some(commands::capture::capture_command(args)),
+        "network" => Some(commands::network::network_command(args)),
+        "approval" => Some(commands::approval::approval_command(args)),
+        _ => None,
+    }
 }
 
 /// The command line as text, or nothing when one argument is not text.

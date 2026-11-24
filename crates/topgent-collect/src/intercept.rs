@@ -3,18 +3,18 @@
 //! Every response Topgent can currently make is retrospective: it observes
 //! something, then stops the process that did it. Preventing the action itself
 //! needs a point where the operating system pauses the request and asks. Such
-//! points exist, and none of them is available to an ordinary user process, so
-//! this module's job is to say precisely which one applies here and what it
-//! would take rather than to claim the capability or to deny it flatly.
-//!
-//! The distinction matters because `Block` and `Approval` are already in the
-//! response ladder. Until now they refused on every host with the same answer,
-//! which reads as "this product does not do that" when the truth is "this
-//! installation is one privilege away from doing that".
+//! points exist, but OS support and privileges alone cannot supply a Topgent
+//! backend. This probe reports prerequisites without advertising functioning
+//! prevention. `Block` and `Approval` must refuse until a backend is verified.
 
 /// What an interception point would need on this host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Interception {
+    /// OS prerequisites do not supply the missing Topgent implementation.
+    NotInstalled {
+        /// Potential operating-system mechanism.
+        mechanism: &'static str,
+    },
     /// A usable interception point is available to this process now.
     Available {
         /// The mechanism in the operating system's own terms.
@@ -45,6 +45,7 @@ impl Interception {
     #[must_use]
     pub const fn state(&self) -> &'static str {
         match self {
+            Self::NotInstalled { .. } => "not_installed",
             Self::Available { .. } => "available",
             Self::PrivilegeRequired { .. } => "privilege_required",
             Self::Unsupported { .. } => "unsupported",
@@ -55,11 +56,18 @@ impl Interception {
     #[must_use]
     pub fn detail(&self) -> String {
         match self {
+            Self::NotInstalled { mechanism } => {
+                format!(
+                    "{mechanism}: no interception backend is installed; prevention is unavailable"
+                )
+            }
             Self::Available { mechanism } => {
                 format!("{mechanism} is available to this process")
             }
             Self::PrivilegeRequired { mechanism, needs } => {
-                format!("{mechanism} is supported by this host but needs {needs}")
+                format!(
+                    "{mechanism} needs {needs}; Topgent also has no interception backend installed, so granting privileges alone does not enable prevention"
+                )
             }
             Self::Unsupported { why } => (*why).to_owned(),
         }
@@ -141,7 +149,7 @@ pub fn linux_interception(kernel_config: &str, process_status: &str) -> Intercep
         };
     }
     if effective_capabilities(process_status).is_some_and(|caps| caps & (1 << CAP_SYS_ADMIN) != 0) {
-        return Interception::Available {
+        return Interception::NotInstalled {
             mechanism: MECHANISM,
         };
     }
@@ -172,8 +180,7 @@ mod tests {
         // Observed on Kali 6.19.14 aarch64: the kernel is built for permission
         // events and an ordinary shell holds no capabilities at all, so
         // fanotify_init returns EPERM. Reporting that as "unsupported" would
-        // tell the operator the product cannot do this, when the truth is that
-        // this installation is one privilege away from doing it.
+        // hide the OS prerequisite. Privileges alone still cannot supply a backend.
         let unprivileged = "Name:\tbash\nCapEff:\t0000000000000000\n";
         let state = linux_interception(PERMISSIVE_KERNEL, unprivileged);
         assert_eq!(state.state(), "privilege_required");
@@ -184,11 +191,14 @@ mod tests {
     }
 
     #[test]
-    fn holding_the_privilege_is_the_only_thing_that_makes_it_available() {
+    fn holding_the_privilege_without_a_backend_never_makes_it_available() {
         // CAP_SYS_ADMIN is bit 21. Only that bit counts: a process with every
         // other capability still cannot open a permission group.
         let admin = format!("CapEff:\t{:016x}\n", 1_u64 << 21);
-        assert!(linux_interception(PERMISSIVE_KERNEL, &admin).is_available());
+        let privileged = linux_interception(PERMISSIVE_KERNEL, &admin);
+        assert!(!privileged.is_available());
+        assert_eq!(privileged.state(), "not_installed");
+        assert!(privileged.detail().contains("no interception backend"));
 
         let everything_else = format!("CapEff:\t{:016x}\n", u64::MAX ^ (1_u64 << 21));
         assert_eq!(
@@ -223,7 +233,7 @@ mod tests {
         // incapable of something it may well support.
         assert_eq!(
             linux_interception("", &admin).state(),
-            "available",
+            "not_installed",
             "an unreadable kernel configuration became a verdict"
         );
     }
@@ -239,7 +249,6 @@ mod tests {
         );
         // Nothing is available without a privilege or a driver, so a bare
         // process claiming it can hold an action open is a bug.
-        #[cfg(not(target_os = "linux"))]
         assert!(!state.is_available());
     }
 }

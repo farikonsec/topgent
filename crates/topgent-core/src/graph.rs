@@ -24,6 +24,16 @@ pub struct AgentId {
     pub started_at: UnixMillis,
 }
 
+/// The evidence behind an agent's model.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSource {
+    /// The file or flag it was read from, as the collector named it.
+    pub probe: String,
+    /// `Certain` for something the running session wrote, `Likely` for a
+    /// configuration.
+    pub confidence: Confidence,
+}
+
 /// Whose authority an agent acts under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IdentityKind {
@@ -256,6 +266,14 @@ pub struct Agent {
     pub identity: IdentityKind,
     /// Provider and model, when observed.
     pub model: Option<(String, String)>,
+    /// Where the model was read, and how firmly that establishes it.
+    ///
+    /// A transcript the running session wrote and a configuration it may have
+    /// overridden are different evidence; without this the interface called
+    /// every model "declared in the agent's own configuration".
+    pub model_source: Option<ModelSource>,
+    /// Other models it used recently, sorted. Never includes `model`.
+    pub models_seen: Vec<(String, String)>,
     /// Parent process, when observed.
     pub parent_pid: Option<u32>,
     /// Descendant processes, sorted by depth then pid.
@@ -541,6 +559,8 @@ struct Builder {
     uid: Option<u32>,
     user: Option<String>,
     model: Option<(String, String)>,
+    model_source: Option<ModelSource>,
+    models_seen: std::collections::BTreeSet<(String, String)>,
     parent_pid: Option<u32>,
     connectors: BTreeMap<String, Access>,
     endpoints: BTreeMap<(Protocol, String, u16, u8), EndpointFacts>,
@@ -625,7 +645,7 @@ impl ResourceBuilder {
 /// One key per resource, whatever names it.
 ///
 /// Reachability reports `~/.aws/credentials` because that is what a person
-/// reads. The filesystem sensor reports `/home/kali/.aws/credentials` because
+/// reads. The filesystem sensor reports `/home/user/.aws/credentials` because
 /// that is what the kernel saw. Keyed as written, those are two resources: the
 /// credential stays "never touched" however often it is opened, and
 /// `CREDENTIAL_ACCESS` can never fire for anything under a home directory, which
@@ -930,8 +950,15 @@ fn apply(b: &mut Builder, fact: &Fact, home: Option<&str>) {
         } => {
             b.extensions.insert(extension_id.clone(), family.clone());
         }
+        Claim::ModelSeen { provider, model } => {
+            b.models_seen.insert((provider.clone(), model.clone()));
+        }
         Claim::ModelInUse { provider, model } => {
             b.model = Some((provider.clone(), model.clone()));
+            b.model_source = Some(ModelSource {
+                probe: probe.to_owned(),
+                confidence: fact.provenance().confidence,
+            });
         }
         Claim::ConnectorDeclared { name, access } => {
             b.connectors.insert(name.clone(), *access);
@@ -952,6 +979,7 @@ const fn direction_key(d: Direction) -> u8 {
     match d {
         Direction::Outbound => 0,
         Direction::Listening => 1,
+        Direction::Inbound => 2,
     }
 }
 
@@ -962,14 +990,26 @@ fn finish(id: AgentId, b: Builder) -> Agent {
     // but only once we have seen that it HAS a config to mention things in.
     // Without that check an agent nobody has read config for would report every
     // path as denied, which reads as reassurance we have not earned.
+    //
+    // A sandbox marker alone names no path. Every Codex sandbox mode allows
+    // reading anywhere and running programs, so under a bare marker a read or
+    // an execute is not something it declared denied: treating it as denied
+    // made a child's `cat` of a file in /tmp a sandbox violation. A write is
+    // still closed, because the modes do deny writes outside the workspace.
+    let names_paths = b
+        .resources
+        .iter()
+        .any(|(path, r)| path != "<sandbox>" && !matches!(r.declared, Tri::Unknown));
     let close_declared = b.has_declared_permissions;
 
     let mut resources: Vec<ResourceAccess> = b
         .resources
         .into_iter()
         .map(|(path, r)| {
+            let closes = close_declared
+                && (names_paths || matches!(r.access, Some(Access::Write | Access::ReadWrite)));
             let declared = match r.declared {
-                Tri::Unknown if close_declared => Tri::No,
+                Tri::Unknown if closes => Tri::No,
                 other => other,
             };
             let mut evidence = r.evidence;
@@ -1065,7 +1105,13 @@ fn finish(id: AgentId, b: Builder) -> Agent {
         uid: b.uid,
         user: b.user,
         identity,
+        models_seen: b
+            .models_seen
+            .into_iter()
+            .filter(|seen| b.model.as_ref() != Some(seen))
+            .collect(),
         model: b.model,
+        model_source: b.model_source,
         parent_pid: b.parent_pid,
         children,
         connectors,

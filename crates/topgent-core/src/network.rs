@@ -145,6 +145,7 @@ fn direction_rank(direction: Direction) -> u8 {
     match direction {
         Direction::Outbound => 0,
         Direction::Listening => 1,
+        Direction::Inbound => 2,
     }
 }
 
@@ -198,7 +199,9 @@ fn verdict(protocol: Protocol, host: &str, port: u16, direction: Direction) -> N
         Direction::Outbound if is_private(host) && !is_loopback(host) => {
             NetworkVerdict::PrivatePeer
         }
-        Direction::Outbound | Direction::Listening => NetworkVerdict::Observed,
+        // A peer that connected in is not a place the agent reached. The
+        // listener it arrived on is what carries any exposure finding.
+        Direction::Outbound | Direction::Listening | Direction::Inbound => NetworkVerdict::Observed,
     }
 }
 

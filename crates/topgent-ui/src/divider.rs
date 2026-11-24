@@ -24,13 +24,16 @@ use iced::{Color, Element, Event, Length, Rectangle, Size, mouse};
 /// A vertical line the reader can drag sideways.
 pub struct Divider<Message> {
     /// How tall the line is drawn.
-    height: f32,
+    height: Length,
     /// The colour of the line at rest.
     colour: Color,
     /// The colour while it is being dragged or hovered.
     active: Color,
     /// Built from the pixels moved since the last event.
     on_drag: Box<dyn Fn(f32) -> Message>,
+    /// Emitted once when a drag finishes, so callers can persist its result
+    /// without writing to disk for every pixel crossed.
+    on_release: Option<Box<dyn Fn() -> Message>>,
 }
 
 /// Where a drag started, or `None` when nothing is being dragged.
@@ -55,17 +58,25 @@ const REACH: f32 = 3.0;
 impl<Message> Divider<Message> {
     /// A divider that reports how far it has been dragged.
     pub fn new(
-        height: f32,
+        height: impl Into<Length>,
         colour: Color,
         active: Color,
         on_drag: impl Fn(f32) -> Message + 'static,
     ) -> Self {
         Self {
-            height,
+            height: height.into(),
             colour,
             active,
             on_drag: Box::new(on_drag),
+            on_release: None,
         }
+    }
+
+    /// Send one message when the pointer releases a divider that was grabbed.
+    #[must_use]
+    pub fn on_release(mut self, message: impl Fn() -> Message + 'static) -> Self {
+        self.on_release = Some(Box::new(message));
+        self
     }
 }
 
@@ -82,19 +93,20 @@ where
     }
 
     fn size(&self) -> Size<Length> {
-        Size::new(
-            Length::Fixed(LINE + REACH * 2.0),
-            Length::Fixed(self.height),
-        )
+        Size::new(Length::Fixed(LINE + REACH * 2.0), self.height)
     }
 
     fn layout(
         &mut self,
         _tree: &mut widget::Tree,
         _renderer: &Renderer,
-        _limits: &layout::Limits,
+        limits: &layout::Limits,
     ) -> layout::Node {
-        layout::Node::new(Size::new(LINE + REACH * 2.0, self.height))
+        layout::Node::new(limits.resolve(
+            Length::Fixed(LINE + REACH * 2.0),
+            self.height,
+            Size::ZERO,
+        ))
     }
 
     fn update(
@@ -130,8 +142,13 @@ where
                     }
                 }
             }
-            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left)) => {
-                grab.from = None;
+            Event::Mouse(mouse::Event::ButtonReleased(mouse::Button::Left))
+                if grab.from.take().is_some() =>
+            {
+                if let Some(message) = &self.on_release {
+                    shell.publish(message());
+                }
+                shell.capture_event();
             }
             _ => {}
         }

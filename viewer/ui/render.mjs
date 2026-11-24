@@ -6,6 +6,7 @@
 // impossible by construction. In a security tool a stale row is a wrong answer,
 // which costs more than a redraw.
 
+import { renderIncidents } from "./panels/incidents.mjs";
 import { renderOverview } from "./panels/overview.mjs";
 import { renderAgents } from "./panels/agents.mjs";
 import { renderRisk } from "./panels/risk.mjs";
@@ -18,8 +19,16 @@ import { renderHealth } from "./panels/health.mjs";
 import { renderResponse } from "./panels/response.mjs";
 import { renderContext } from "./panels/context.mjs";
 import { renderAssets } from "./panels/assets.mjs";
+import { renderProcesses } from "./panels/processes.mjs";
+import { renderActions } from "./panels/actions.mjs";
+import { renderFiles } from "./panels/files.mjs";
+import { renderBehaviour } from "./panels/behaviour.mjs";
+import { renderSettings } from "./panels/settings.mjs";
+import { renderSimple } from "./simple.mjs";
 
 export function render() {
+  renderSimple();
+  renderIncidents();
   renderOverview();
   renderAgents();
   renderRisk();
@@ -32,4 +41,9 @@ export function render() {
   renderResponse();
   renderContext();
   renderAssets();
+  renderProcesses();
+  renderActions();
+  renderFiles();
+  renderBehaviour();
+  renderSettings();
 }

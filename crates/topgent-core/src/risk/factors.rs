@@ -54,23 +54,37 @@ pub(super) fn process_explosion_factor(agent: &Agent, policy: &topgent_policy::P
     }
 }
 
+/// A sandboxed agent observed doing something its own declarations deny.
+///
+/// Only a path the agent declared off limits and was then observed touching
+/// counts. A network connection does not, for two reasons the evidence cannot
+/// get past yet: a sandbox can allow networking, and every sandboxed agent
+/// talks to its own model provider from its own process, which no tool sandbox
+/// confines. Telling that apart needs the process that opened the connection
+/// and the sandbox's network rule, and until both are observed a connection is
+/// not an escape.
+///
+/// The code keeps its name so reports and policies stay stable. The finding it
+/// states is a mismatch between declaration and observation, which is what was
+/// seen; that the sandbox was actually escaped is not.
 pub(super) fn sandbox_factor(agent: &Agent) -> Option<Factor> {
-    let drift = !agent.drift().is_empty();
-    if !agent.is_sandboxed() || (!drift && agent.outbound_count() == 0) {
+    if !agent.is_sandboxed() {
         return None;
     }
-    let source = if drift {
-        "touched a path outside its sandbox".to_owned()
-    } else {
-        format!(
-            "opened {} outbound connection(s) from a sandbox",
-            agent.outbound_count()
-        )
+    let drift = agent.drift();
+    let first = drift.first()?;
+    let source = match drift.len() {
+        1 => format!("observed at {}, which it declared off limits", first.path),
+        more => format!(
+            "observed at {} and {} other path(s) it declared off limits",
+            first.path,
+            more - 1
+        ),
     };
     Some(Factor {
         code: FactorCode::SandboxEscape,
         points: 100,
-        title: "Sandboxed agent is acting outside its sandbox".to_owned(),
+        title: "Sandboxed agent used a path its sandbox denies".to_owned(),
         source,
         confidence: agent.confidence_for("file_touched"),
     })

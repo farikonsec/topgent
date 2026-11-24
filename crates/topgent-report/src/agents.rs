@@ -39,12 +39,38 @@ pub(crate) const MAX_SWEEP_MS: u64 = 60_000;
 /// that is a genuine negative. Saying which is the difference between "not an
 /// agent" and "cannot tell", and only one of them deserves the user's trust.
 pub(crate) fn identity_evidence(a: &Agent) -> Value {
-    let state = match (a.family.is_some(), a.exe_path_known) {
-        (true, _) => "confirmed",
-        (false, false) => "unexamined",
-        (false, true) => "unrecognised",
+    let strength = a.family.as_deref().and_then(|family| {
+        topgent_collect::signatures::identity_strength(family, a.exe.as_deref().unwrap_or(""))
+    });
+    let state = if a.extensions.is_empty() {
+        match (a.family.is_some(), a.exe_path_known, strength) {
+            (true, _, Some(topgent_collect::signatures::IdentityStrength::NameOnly)) => "name_only",
+            (true, _, _) => "confirmed",
+            (false, false, _) => "unexamined",
+            (false, true, _) => "unrecognised",
+        }
+    } else {
+        "confirmed"
+    };
+    let class = match (strength, a.extensions.is_empty()) {
+        (_, false)
+        | (Some(topgent_collect::signatures::IdentityStrength::KnownInstallPath), true) => "known",
+        (Some(topgent_collect::signatures::IdentityStrength::NameOnly), true) => "suspected",
+        _ => "unknown",
+    };
+    let strength = if a.extensions.is_empty() {
+        strength.map(topgent_collect::signatures::IdentityStrength::as_str)
+    } else {
+        Some("active_extension")
     };
     let mut limits: Vec<&str> = Vec::new();
+    if state == "name_only" {
+        limits.push(
+            "Recognised by its name only. It is not under an install location this build \
+             knows for the family, so it may be a portable install or a program named to \
+             look like one.",
+        );
+    }
     if !a.exe_path_known {
         limits.push(
             "The executable path was refused by the operating system, so this \
@@ -59,11 +85,65 @@ pub(crate) fn identity_evidence(a: &Agent) -> Value {
         limits.push("No parent process was reported for this process.");
     }
     json!({
+        "class": class,
         "state": state,
+        "strength": strength,
         "exe_path_known": a.exe_path_known,
         "owner_known": a.user.is_some(),
         "parent_known": a.parent_pid.is_some(),
         "limits": limits,
+    })
+}
+
+/// Where a factor's evidence came from. When a descendant's action raised
+/// it, the process that actually acted is named beside the sensor, so the
+/// finding never reads as though the agent did it with its own hands.
+fn factor_source(agent: &topgent_core::Agent, factor: &topgent_core::Factor) -> String {
+    let actors: Vec<&str> = agent
+        .resources
+        .iter()
+        .filter(|resource| factor.title.contains(&resource.path))
+        .flat_map(|resource| &resource.evidence)
+        .filter(|evidence| evidence.contains("direct actor"))
+        .map(String::as_str)
+        .collect();
+    if actors.is_empty() {
+        factor.source.clone()
+    } else {
+        format!("{}; {}", factor.source, actors.join("; "))
+    }
+}
+
+/// What a model reading rests on, and how much was read to get it.
+///
+/// The source is shown in its `~` form, which keeps the account name out of a
+/// report. The reading statement is the privacy boundary in plain words: how
+/// much of which file was read, and that nothing else from it is kept.
+fn model_evidence(source: &topgent_core::ModelSource) -> Value {
+    let home = std::env::var("HOME").ok();
+    let probe = topgent_core::resource_key(&source.probe, home.as_deref());
+    let observed = source.confidence == topgent_facts::Confidence::Certain;
+    let read = if probe.starts_with("command line flag") {
+        "one flag's value; the rest of the command line is not kept".to_owned()
+    } else if std::path::Path::new(&probe)
+        .extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+    {
+        format!(
+            "the last {} KB of this session's transcript; the prompts in it are parsed in \
+             memory, and only the model name is kept",
+            topgent_collect::model::TAIL_BYTES / 1024
+        )
+    } else {
+        format!(
+            "the first {} KB of the file; only the model name is kept",
+            topgent_collect::model::HEAD_BYTES / 1024
+        )
+    };
+    json!({
+        "certainty": if observed { "observed" } else { "declared" },
+        "source": probe,
+        "read": read,
     })
 }
 
@@ -86,6 +166,35 @@ pub(crate) fn agent_json(scored: &(Agent, Risk), policy: &Policy, generated_at: 
     agent_json_named(scored, policy, generated_at, Naming::Resolved)
 }
 
+/// The container an agent runs in, by full id: read from its cgroup, and
+/// only for the run this sweep saw alive, so a pid reused since is never
+/// given another process's container. A replay has no live process to read
+/// and claims none.
+pub(crate) fn live_container(
+    agent: &Agent,
+    processes: &[topgent_collect::process::ProcInfo],
+) -> Option<String> {
+    processes
+        .iter()
+        .any(|p| p.pid == agent.id.pid && p.started_at == agent.id.started_at)
+        .then(|| std::fs::read_to_string(format!("/proc/{}/cgroup", agent.id.pid)).ok())
+        .flatten()
+        .and_then(|text| topgent_collect::container::container_id_from_cgroup(&text))
+}
+
+/// An agent's container, as its row shows it: the short id, and the image
+/// when the runtime has said. Asking is started here; the answer, which
+/// arrives on a worker thread, is on a later sweep's row.
+pub(crate) fn container_json(full_id: &str) -> Value {
+    topgent_collect::container_context::notice(full_id);
+    let context = topgent_collect::container_context::context(full_id);
+    json!({
+        "id": full_id.chars().take(12).collect::<String>(),
+        "image": context.as_ref().and_then(|c| c.image.clone()),
+        "privileged": context.as_ref().and_then(|c| c.privileged),
+    })
+}
+
 #[allow(clippy::too_many_lines)]
 pub(crate) fn agent_json_named(
     (a, r): &(Agent, Risk),
@@ -101,6 +210,7 @@ pub(crate) fn agent_json_named(
         "asset_disposition": asset_disposition.label(),
         "started_at": a.id.started_at.0,
         "family": a.family,
+        "kind": a.family.as_deref().and_then(topgent_collect::signatures::kind_of).map(topgent_collect::signatures::ProductKind::as_str),
         "extensions": a.extensions.iter().map(|extension| json!({
             "family": extension.family,
             "extension_id": extension.extension_id,
@@ -132,6 +242,11 @@ pub(crate) fn agent_json_named(
                 format!("{provider}/{model}")
             }
         }),
+        "model_evidence": a.model_source.as_ref().map(model_evidence),
+        // Every other model the agent used recently, as provider/model.
+        "models_seen": a.models_seen.iter().map(|(provider, model)| {
+            if provider.is_empty() || model.contains('/') { model.clone() } else { format!("{provider}/{model}") }
+        }).collect::<Vec<_>>(),
         "discovery_confidence": a.discovery_confidence.label(),
         "score": r.score,
         "grade": r.grade.label(),
@@ -142,16 +257,20 @@ pub(crate) fn agent_json_named(
         "outbound": a.outbound_count(),
         "factors": r.factors.iter().map(|f| {
             let (id, desc) = atlas_for(f.code.as_str());
+            let source = factor_source(a, f);
             json!({
                 "code": f.code.as_str(),
                 "points": f.points,
                 "title": f.title,
-                "source": f.source,
+                "source": source,
                 "confidence": f.confidence.label(),
                 "atlas_id": id,
                 "atlas_desc": desc,
             })
         }).collect::<Vec<_>>(),
+        // The factors above in plain words, one line per kind of risk, for
+        // the simple view. Same order of urgency on every front end.
+        "summary": crate::plain::summary(r.factors.iter().map(|f| (f.code.as_str(), f.title.as_str()))),
         "resources": a.resources.iter().map(|res| json!({
             "path": res.path,
             "declared": res.declared.label(),
@@ -248,6 +367,8 @@ mod tests {
             user: None,
             identity: IdentityKind::Unknown,
             model: None,
+            model_source: None,
+            models_seen: Vec::new(),
             parent_pid: None,
             children: Vec::new(),
             connectors: Vec::new(),
@@ -390,10 +511,47 @@ mod tests {
         );
     }
 
+    /// A copy of any program named `claude` is not Claude Code. It is
+    /// recognised by name, and the report must say that is all it was.
+    #[test]
+    fn a_same_name_decoy_is_reported_as_a_name_match_not_a_confirmation() {
+        let mut agent = unidentified(true);
+        agent.family = Some("claude-code".to_owned());
+        agent.exe = Some("/tmp/claude".to_owned());
+        let evidence = identity_evidence(&agent);
+        assert_eq!(evidence["class"], "suspected");
+        assert_eq!(evidence["state"], "name_only");
+        assert!(
+            evidence["limits"]
+                .as_array()
+                .is_some_and(|limits| limits.iter().any(|limit| limit
+                    .as_str()
+                    .is_some_and(|text| text.contains("portable install")))),
+            "{evidence}"
+        );
+    }
+
+    /// The native installer's own location is the evidence a name cannot give.
+    #[test]
+    fn a_known_install_path_is_reported_as_such() {
+        let mut agent = unidentified(true);
+        agent.family = Some("claude-code".to_owned());
+        agent.exe = Some("/home/u/.local/share/claude/versions/2.1.3".to_owned());
+        agent.user = Some("u".to_owned());
+        agent.parent_pid = Some(1);
+        let evidence = identity_evidence(&agent);
+        assert_eq!(evidence["class"], "known");
+        assert_eq!(evidence["state"], "confirmed");
+        assert_eq!(evidence["strength"], "known_install_path");
+    }
+
     #[test]
     fn a_recognised_agent_reports_confirmed_identity() {
         let mut agent = unidentified(true);
         agent.family = Some("codex-cli".to_owned());
+        // A bare name is a name match; the npm install location is what
+        // confirms Codex.
+        agent.exe = Some("/usr/lib/node_modules/@openai/codex/bin/codex".to_owned());
         agent.user = Some("testuser".to_owned());
         agent.parent_pid = Some(1);
         let evidence = identity_evidence(&agent);
@@ -405,5 +563,19 @@ mod tests {
                 .as_array()
                 .is_some_and(std::vec::Vec::is_empty)
         );
+    }
+
+    #[test]
+    fn an_active_extension_is_known_even_when_the_editor_name_is_not() {
+        let mut agent = unidentified(true);
+        agent.family = Some("cline".to_owned());
+        agent.extensions.push(topgent_core::graph::EditorExtension {
+            family: "cline".to_owned(),
+            extension_id: "saoudrizwan.claude-dev".to_owned(),
+        });
+        let evidence = identity_evidence(&agent);
+        assert_eq!(evidence["class"], "known");
+        assert_eq!(evidence["state"], "confirmed");
+        assert_eq!(evidence["strength"], "active_extension");
     }
 }

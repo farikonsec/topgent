@@ -1,0 +1,32 @@
+[package]
+name = "topgent-behaviour"
+description = "Runtime behaviour rules: the F catalogue's condition language, evaluated on Topgent's own events."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true
+
+[[test]]
+name = "language"
+path = "tests/language.rs"
+
+[[test]]
+name = "catalogue"
+path = "tests/catalogue.rs"
+
+[[test]]
+name = "rules"
+path = "tests/rules.rs"
+
+[[test]]
+name = "coverage"
+path = "tests/coverage.rs"

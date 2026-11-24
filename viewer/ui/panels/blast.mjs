@@ -5,7 +5,7 @@
 
 import { connectionAge, connectionTraffic } from "../alerts.mjs";
 import { $, el } from "../dom.mjs";
-import { session } from "../state.mjs";
+import { session, findAgent } from "../state.mjs";
 import { invoke } from "../transport.mjs";
 
 export function blastPanel(a, compact) {
@@ -55,7 +55,7 @@ function brCard(n, label, items, hot) {
 }
 
 export function renderBlast() {
-  const a = session.data.agents.find(x => x.pid === session.selected);
+  const a = findAgent(session.selected);
   $("blastSub").textContent = a ? `pid ${a.pid}` : "";
   if (!a) { $("blast").replaceChildren(el("div", { className: "empty", textContent: "Select an agent to see what a compromise would reach." })); return; }
   $("blast").replaceChildren(blastPanel(a, false));

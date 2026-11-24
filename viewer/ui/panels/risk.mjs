@@ -4,10 +4,10 @@
 // breakdown is an assertion; this panel is the argument.
 
 import { $, CONF, GRADE, el, marks } from "../dom.mjs";
-import { session } from "../state.mjs";
+import { session, findAgent } from "../state.mjs";
 
 export function renderRisk() {
-  const a = session.data.agents.find(x => x.pid === session.selected);
+  const a = findAgent(session.selected);
   $("riskTitle").textContent = a ? `Risk — ${a.family ?? "agent"}` : "Risk";
   $("riskSub").textContent = a ? `pid ${a.pid} · score ${a.score}` : "";
   const out = document.createDocumentFragment();

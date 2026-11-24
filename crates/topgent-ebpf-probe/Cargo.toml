@@ -1,0 +1,50 @@
+# The kernel-side half of Topgent's eBPF source.
+#
+# Deliberately outside the Topgent workspace (the root manifest excludes it):
+# it builds for `bpfel-unknown-none` on a pinned nightly, so it must never be
+# picked up by `cargo test --workspace` on stable. `topgent-ebpf`'s build
+# script compiles it when that crate's `probe` feature is on.
+#
+# Licence: the kernel only lets GPL-compatible programs call most helpers
+# (reading task structs, for one), so this crate alone is dual MIT/GPL, the
+# norm for Rust eBPF programs. Everything that runs in user space stays
+# Apache-2.0.
+
+[package]
+name = "topgent-ebpf-probe"
+description = "Topgent's kernel-side eBPF programs. Observe only."
+version = "0.5.1"
+edition = "2024"
+license = "MIT OR GPL-2.0-only"
+publish = false
+
+# Its own workspace, so cargo never walks up to the Topgent one.
+[workspace]
+
+[dependencies]
+aya-ebpf = { version = "0.2.1", default-features = false }
+topgent-ebpf-common = { path = "../topgent-ebpf-common" }
+
+[[bin]]
+name = "topgent-probe"
+path = "src/main.rs"
+
+# BTF (for CO-RE, so one probe runs on many kernels) is produced from debug
+# info, so it stays in and nothing is stripped.
+[profile.release]
+debug = 2
+codegen-units = 1
+strip = false
+panic = "abort"
+
+[profile.dev]
+panic = "abort"
+
+[lints.rust]
+missing_docs = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+all = { level = "deny", priority = -1 }
+# The one place Topgent allows `unsafe`. Every block says why it is sound.
+undocumented_unsafe_blocks = "deny"

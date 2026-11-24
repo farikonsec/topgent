@@ -19,6 +19,9 @@ use serde::{Deserialize, Serialize};
 /// The choices, as they are written to disk.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+// Each flag is an independent on/off a person sets on the settings page;
+// folding them into enums would only rename the switches.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Settings {
     /// Which theme.
     pub appearance: Appearance,
@@ -42,7 +45,61 @@ pub struct Settings {
     /// order to be used. Kept here so that switching it off survives a
     /// restart: an off switch that forgets is not an off switch.
     pub capture: bool,
+    /// The workspace the window was last reading.
+    ///
+    /// A monitor is reopened to carry on with something, not to start again.
+    /// Somebody watching the event log through a change does not want to be
+    /// put back on the agent list every time the window is reopened.
+    pub workspace: crate::shell::Workspace,
+    /// The tab of the agent investigation that was last open, for the same
+    /// reason.
+    pub tab: crate::agents::Tab,
+    /// Width of the host navigation pane in the full window.
+    pub sidebar_width: f32,
+    /// Width of the agent picker beside its evidence.
+    pub agent_list_width: f32,
+    /// Whether the host navigation is folded to its boundary handle.
+    pub sidebar_state: PaneState,
+    /// Whether the agent picker is folded to its boundary handle.
+    pub agent_list_state: PaneState,
+    /// Whether the window shows the simple view: the overview and incidents,
+    /// without the technical pages. On by default.
+    pub simple: bool,
 }
+
+/// Whether one of the workspace panes occupies its saved width.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneState {
+    /// The pane is visible and its boundary can be dragged.
+    #[default]
+    Expanded,
+    /// Only the boundary handle remains visible.
+    Collapsed,
+}
+
+impl PaneState {
+    /// Fold an expanded pane or restore a folded one.
+    #[must_use]
+    pub const fn toggled(self) -> Self {
+        match self {
+            Self::Expanded => Self::Collapsed,
+            Self::Collapsed => Self::Expanded,
+        }
+    }
+
+    /// Whether the pane should be omitted from the row.
+    #[must_use]
+    pub const fn is_collapsed(self) -> bool {
+        matches!(self, Self::Collapsed)
+    }
+}
+
+/// Safe persisted width ranges for the two horizontal panes.
+pub const SIDEBAR_WIDTH: (f32, f32) = (180.0, 360.0);
+/// The agent list needs enough room for its filter and cards, but must not be
+/// allowed to consume the evidence surface.
+pub const AGENT_LIST_WIDTH: (f32, f32) = (260.0, 520.0);
 
 impl Default for Settings {
     fn default() -> Self {
@@ -54,6 +111,13 @@ impl Default for Settings {
             notify: true,
             capture: true,
             sound: false,
+            workspace: crate::shell::Workspace::Overview,
+            tab: crate::agents::Tab::Overview,
+            sidebar_width: 228.0,
+            agent_list_width: 304.0,
+            sidebar_state: PaneState::Expanded,
+            agent_list_state: PaneState::Expanded,
+            simple: true,
         }
     }
 }
@@ -115,7 +179,25 @@ impl Settings {
         if self.refresh_ms != 0 && !(500..=600_000).contains(&self.refresh_ms) {
             self.refresh_ms = Self::default().refresh_ms;
         }
+        self.sidebar_width = sane_width(
+            self.sidebar_width,
+            SIDEBAR_WIDTH,
+            Self::default().sidebar_width,
+        );
+        self.agent_list_width = sane_width(
+            self.agent_list_width,
+            AGENT_LIST_WIDTH,
+            Self::default().agent_list_width,
+        );
         self
+    }
+}
+
+fn sane_width(value: f32, range: (f32, f32), fallback: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(range.0, range.1)
+    } else {
+        fallback
     }
 }
 
@@ -125,7 +207,11 @@ fn path() -> std::path::PathBuf {
 }
 
 /// The settings panel, drawn over the interface.
-pub fn panel<'a>(current: Settings, s: Style) -> Element<'a, Message> {
+pub fn page<'a>(
+    current: Settings,
+    saved: &[(std::path::PathBuf, u64)],
+    s: Style,
+) -> Element<'a, Message> {
     let p = s.palette;
     let heading = |label: &'a str| {
         text(label)
@@ -164,21 +250,6 @@ pub fn panel<'a>(current: Settings, s: Style) -> Element<'a, Message> {
     }
 
     let body = column![
-        row![
-            text("Settings")
-                .size(s.type_size(crate::theme::size::HEADING))
-                .color(p.text),
-            iced::widget::space().width(Length::Fill),
-            button(
-                text("close")
-                    .size(s.type_size(crate::theme::size::BODY))
-                    .color(p.muted)
-            )
-            .on_press(Message::ToggleSettings)
-            .style(button::text)
-            .padding(0),
-        ]
-        .align_y(iced::Alignment::Center),
         heading("THEME"),
         themes,
         heading("DENSITY"),
@@ -204,6 +275,10 @@ pub fn panel<'a>(current: Settings, s: Style) -> Element<'a, Message> {
         ),
         heading("THIS SESSION"),
         session_controls(s),
+        heading("SAVED SESSIONS"),
+        crate::session::saved_list(saved, s),
+        heading("WORKSPACE LAYOUT"),
+        action("Reset pane layout", Message::ResetPaneLayout, s),
         heading("REFRESH"),
         refreshes,
         text("Paused stops scanning until this window is reopened.")
@@ -212,17 +287,18 @@ pub fn panel<'a>(current: Settings, s: Style) -> Element<'a, Message> {
     ]
     .spacing(s.pad(crate::theme::space::BASE));
 
-    container(
-        container(body)
-            .style(crate::theme::region(crate::theme::Region::Panel, p))
-            .padding(s.pad(crate::theme::space::LOOSE))
-            .width(Length::Fixed(460.0)),
+    iced::widget::scrollable(
+        container(
+            container(body)
+                .style(crate::theme::region(crate::theme::Region::Panel, p))
+                .padding(s.pad(crate::theme::space::LOOSE))
+                .width(Length::Fixed(520.0)),
+        )
+        .padding([0.0, s.pad(crate::theme::space::LOOSE)])
+        .width(Length::Fill),
     )
-    .style(crate::theme::region(crate::theme::Region::Scrim, p))
-    .width(Length::Fill)
     .height(Length::Fill)
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
+    .width(Length::Fill)
     .into()
 }
 
@@ -471,10 +547,29 @@ mod tests {
             notify: false,
             capture: false,
             sound: true,
+            workspace: crate::shell::Workspace::Events,
+            tab: crate::agents::Tab::Blast,
+            sidebar_width: 310.0,
+            agent_list_width: 420.0,
+            sidebar_state: PaneState::Collapsed,
+            agent_list_state: PaneState::Collapsed,
+            simple: false,
         };
         let raw = serde_json::to_string(&chosen).expect("settings serialise");
         let back: Settings = serde_json::from_str(&raw).expect("settings deserialise");
         assert_eq!(chosen, back);
+    }
+
+    #[test]
+    fn pane_sizes_are_clamped_and_non_finite_values_fall_back() {
+        let broken = Settings {
+            sidebar_width: f32::NAN,
+            agent_list_width: 9_000.0,
+            ..Settings::default()
+        }
+        .sane();
+        assert!((broken.sidebar_width - Settings::default().sidebar_width).abs() < f32::EPSILON);
+        assert!((broken.agent_list_width - AGENT_LIST_WIDTH.1).abs() < f32::EPSILON);
     }
 
     #[test]

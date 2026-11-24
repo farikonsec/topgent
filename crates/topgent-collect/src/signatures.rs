@@ -82,6 +82,15 @@ pub struct FamilySignature {
     /// Package-path fragments required as corroborating evidence.
     #[serde(default)]
     pub path_markers: Vec<String>,
+    /// Whether a name match without any marker is still accepted.
+    ///
+    /// Some products cannot always be placed by path: a native Claude Code
+    /// install resolves to a file named after its version, and a portable
+    /// runtime can live anywhere. Those families opt in here, so dropping them
+    /// is never silent, and every such match is published as
+    /// [`IdentityStrength::NameOnly`] rather than as a confirmation.
+    #[serde(default)]
+    pub name_only: bool,
     /// Exact container image repositories accepted as runtime provenance.
     #[serde(default)]
     pub container_images: Vec<String>,
@@ -93,6 +102,86 @@ pub struct FamilySignature {
     pub verified_platforms: Vec<String>,
     /// Most recent live validation date, absent for catalogue-only entries.
     pub last_verified_at: Option<String>,
+}
+
+/// What a recognition rests on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityStrength {
+    /// The executable sits under an install location this build knows for
+    /// the family. That is substring corroboration of a path, not a check of
+    /// the binary: a location the account can write to can be imitated.
+    KnownInstallPath,
+    /// Only the name matched. A portable install and a program named to look
+    /// like one read the same here.
+    NameOnly,
+}
+
+/// The identity state shown to an operator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentityClass {
+    /// Executable name and a catalogue install marker both match.
+    Known,
+    /// Only a family that explicitly permits name-only recognition matches.
+    Suspected,
+    /// No executable signature matches with the evidence available.
+    Unknown,
+}
+
+impl IdentityClass {
+    /// Stable report and evaluation label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Known => "known",
+            Self::Suspected => "suspected",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl IdentityStrength {
+    /// Stable report label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::KnownInstallPath => "known_install_path",
+            Self::NameOnly => "name_only",
+        }
+    }
+}
+
+/// How strongly an executable path places a process in a family it was
+/// recognised as. `None` when the family is not in the catalogue.
+#[must_use]
+pub fn identity_strength(family_id: &str, executable: &str) -> Option<IdentityStrength> {
+    let family = builtin()
+        .ok()?
+        .families
+        .iter()
+        .find(|family| family.id == family_id)?;
+    let lower = executable.to_ascii_lowercase().replace('\\', "/");
+    Some(
+        if family
+            .path_markers
+            .iter()
+            .any(|marker| lower.contains(marker.as_str()))
+        {
+            IdentityStrength::KnownInstallPath
+        } else {
+            IdentityStrength::NameOnly
+        },
+    )
+}
+
+/// The role of a family, by id. `None` when the family is not in the catalogue.
+#[must_use]
+pub fn kind_of(family_id: &str) -> Option<ProductKind> {
+    builtin()
+        .ok()?
+        .families
+        .iter()
+        .find(|family| family.id == family_id)
+        .map(|family| family.kind)
 }
 
 /// A versioned collection of family identities.
@@ -123,6 +212,22 @@ pub fn builtin() -> Result<&'static Catalogue, &'static str> {
 #[must_use]
 pub fn recognise(executable: &str) -> Option<&'static FamilySignature> {
     recognise_in(builtin().ok()?, executable)
+}
+
+/// Classify an executable and return the matching family when one exists.
+///
+/// A mutable name alone never becomes [`IdentityClass::Known`]. Families that
+/// do not explicitly allow name-only matching fail closed as unknown.
+#[must_use]
+pub fn classify(executable: &str) -> (IdentityClass, Option<&'static FamilySignature>) {
+    let Some(family) = recognise(executable) else {
+        return (IdentityClass::Unknown, None);
+    };
+    let class = match identity_strength(&family.id, executable) {
+        Some(IdentityStrength::KnownInstallPath) => IdentityClass::Known,
+        Some(IdentityStrength::NameOnly) | None => IdentityClass::Suspected,
+    };
+    (class, Some(family))
 }
 
 /// Recognise a family from an exact container image repository.
@@ -169,12 +274,26 @@ pub fn recognise_extension(extension_id: &str) -> Option<&'static FamilySignatur
 pub fn recognise_declared_command(command: &str) -> Option<&'static FamilySignature> {
     let lower = command.to_ascii_lowercase().replace('\\', "/");
     let basename = lower.rsplit('/').next().unwrap_or(&lower);
-    builtin().ok()?.families.iter().find(|family| {
+    let named = |family: &FamilySignature| {
         family
             .executables
             .iter()
             .any(|signature| signature.matches(basename))
-    })
+    };
+    let families = &builtin().ok()?.families;
+    let mut candidates = families.iter().filter(|family| named(family));
+    let first = candidates.next()?;
+    // Two families share this name, the first gated by its install path: a
+    // command without that path is the second's. `claude --print` is Claude
+    // Code, not the desktop app whose bundle binary is also named Claude.
+    let placed = first
+        .path_markers
+        .iter()
+        .any(|marker| lower.contains(marker.as_str()));
+    match candidates.next() {
+        Some(second) if !placed => Some(second),
+        _ => Some(first),
+    }
 }
 
 fn recognise_in<'a>(catalogue: &'a Catalogue, executable: &str) -> Option<&'a FamilySignature> {
@@ -185,13 +304,26 @@ fn recognise_in<'a>(catalogue: &'a Catalogue, executable: &str) -> Option<&'a Fa
             .executables
             .iter()
             .any(|signature| signature.matches(basename));
-        let path_matches = family.path_markers.is_empty()
+        let path_matches = family.name_only
             || family
                 .path_markers
                 .iter()
                 .any(|marker| lower.contains(marker));
         executable_matches && path_matches
     })
+}
+
+/// A family with executables says where it installs, or opts in to name-only
+/// recognition. Silence would make a same-name decoy a confirmation.
+fn validate_install_paths(family: &FamilySignature) -> Result<(), String> {
+    if !family.executables.is_empty() && family.path_markers.is_empty() && !family.name_only {
+        return Err(format!(
+            "family {} names executables but no install path, and does not opt in to \
+             name-only recognition",
+            family.id
+        ));
+    }
+    Ok(())
 }
 
 /// Parse and validate a candidate catalogue.
@@ -224,7 +356,9 @@ pub fn validate(catalogue: &Catalogue) -> Result<(), String> {
     let mut ids = BTreeSet::new();
     let mut container_images = BTreeSet::new();
     let mut extension_ids = BTreeSet::new();
-    let mut patterns: Vec<(&str, &ExecutableMatch)> = Vec::new();
+    // (family, pattern, gated): a gated family claims a name only under one of
+    // its install paths, so a later family may share that name.
+    let mut patterns: Vec<(&str, &ExecutableMatch, bool)> = Vec::new();
     for family in &catalogue.families {
         if family.id.is_empty()
             || !family.id.chars().all(|character| {
@@ -243,6 +377,7 @@ pub fn validate(catalogue: &Catalogue) -> Result<(), String> {
         {
             return Err(format!("family {} is incomplete", family.id));
         }
+        validate_install_paths(family)?;
         if family.path_markers.iter().any(|marker| {
             marker.is_empty() || marker != &marker.to_ascii_lowercase() || !marker.starts_with('/')
         }) {
@@ -282,7 +417,7 @@ pub fn validate(catalogue: &Catalogue) -> Result<(), String> {
             {
                 return Err(format!("invalid executable pattern for {}", family.id));
             }
-            for (other_id, other) in &patterns {
+            for (other_id, other, other_gated) in &patterns {
                 let overlaps = match (signature, *other) {
                     (ExecutableMatch::Exact { value: a }, ExecutableMatch::Exact { value: b }) => {
                         a == b
@@ -296,14 +431,18 @@ pub fn validate(catalogue: &Catalogue) -> Result<(), String> {
                         ExecutableMatch::Prefix { value: b },
                     ) => a.starts_with(b) || b.starts_with(a),
                 };
-                if overlaps {
+                if overlaps && !other_gated {
                     return Err(format!(
                         "ambiguous executable patterns for {} and {other_id}",
                         family.id
                     ));
                 }
             }
-            patterns.push((family.id.as_str(), signature));
+            patterns.push((
+                family.id.as_str(),
+                signature,
+                !family.name_only && !family.path_markers.is_empty(),
+            ));
         }
     }
     Ok(())
@@ -332,12 +471,15 @@ fn validate_extension_ids<'a>(
 mod tests {
     #![allow(clippy::expect_used)]
 
-    use super::{ProductKind, builtin, parse_and_validate, recognise_in};
+    use super::{
+        IdentityClass, IdentityStrength, ProductKind, builtin, classify, identity_strength,
+        parse_and_validate, recognise_in, validate,
+    };
 
     #[test]
     fn every_shipped_family_has_positive_and_decoy_coverage() {
         let catalogue = builtin().expect("built-in catalogue must validate");
-        assert_eq!(catalogue.families.len(), 19);
+        assert_eq!(catalogue.families.len(), 27);
         for family in &catalogue.families {
             let Some(first) = family.executables.first() else {
                 assert!(!family.extension_ids.is_empty() || !family.container_images.is_empty());
@@ -360,10 +502,11 @@ mod tests {
                 "prefix decoy for {}",
                 family.id
             );
-            if !family.path_markers.is_empty() {
-                assert_eq!(
-                    recognise_in(catalogue, &format!("/tmp/decoy/{basename}")),
-                    None,
+            if !family.path_markers.is_empty() && !family.name_only {
+                assert_ne!(
+                    recognise_in(catalogue, &format!("/tmp/decoy/{basename}"))
+                        .map(|found| found.id.as_str()),
+                    Some(family.id.as_str()),
                     "same-name path decoy for {}",
                     family.id
                 );
@@ -377,6 +520,184 @@ mod tests {
                 .map(|family| family.kind),
             Some(ProductKind::ModelRuntime)
         );
+    }
+
+    /// The four families that can be recognised by name alone are the ones a
+    /// decoy can imitate. Each is still recognised, so a portable install is
+    /// not dropped, and each is published as a name match, so neither is it
+    /// confirmed.
+    /// The Claude desktop app's binary is named `Claude`, the same basename as
+    /// Claude Code. The desktop family is gated by its bundle path and listed
+    /// first, so it claims only its own bundle, and Claude Code keeps every
+    /// other `claude`.
+    #[test]
+    fn the_claude_desktop_app_is_not_claude_code() {
+        let catalogue = builtin().expect("built-in catalogue must validate");
+        let found = |exe: &str| recognise_in(catalogue, exe).map(|family| family.id.as_str());
+        assert_eq!(
+            found("/Applications/Claude.app/Contents/MacOS/Claude"),
+            Some("claude-desktop")
+        );
+        assert_eq!(
+            found("C:/Users/a/AppData/Local/AnthropicClaude/app-1.0.0/claude.exe"),
+            Some("claude-desktop")
+        );
+        assert_eq!(
+            found("/Users/a/.local/share/claude/versions/2.1.0/claude"),
+            Some("claude-code")
+        );
+        assert_eq!(
+            found(
+                "/Users/a/Library/Application Support/Claude/claude-code/2.1.330/abc/claude.app/Contents/MacOS/claude"
+            ),
+            Some("claude-code"),
+            "the Claude Code the desktop app bundles is still Claude Code"
+        );
+        assert_eq!(
+            found("/Users/a/Applications/Claude.app/Contents/MacOS/Claude"),
+            Some("claude-desktop")
+        );
+        assert_eq!(found("/tmp/elsewhere/claude"), Some("claude-code"));
+        assert_eq!(
+            super::kind_of("claude-desktop"),
+            Some(ProductKind::AgentEditor)
+        );
+    }
+
+    /// Unsloth Studio on macOS: the app, and the llama.cpp server it starts
+    /// for the model, each recognised as what it is.
+    #[test]
+    fn unsloth_studio_and_its_model_server_are_recognised() {
+        let catalogue = builtin().expect("built-in catalogue must validate");
+        let found = |exe: &str| recognise_in(catalogue, exe).map(|family| family.id.as_str());
+        assert_eq!(
+            found("/Applications/Unsloth.app/Contents/MacOS/unsloth-studio"),
+            Some("unsloth")
+        );
+        assert_eq!(
+            found("/Users/a/.unsloth/llama.cpp/build/bin/llama-server"),
+            Some("llama-cpp")
+        );
+        assert_eq!(
+            found("/opt/homebrew/Cellar/llama.cpp/1/bin/llama-cli"),
+            Some("llama-cpp")
+        );
+        assert_eq!(found("/usr/bin/llama-servers"), None);
+        assert_eq!(
+            found("/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"),
+            Some("chatgpt-desktop")
+        );
+        assert_eq!(
+            found(
+                "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex"
+            ),
+            Some("codex-cli"),
+            "the Codex the ChatGPT app bundles is still Codex"
+        );
+    }
+
+    #[test]
+    fn a_name_only_match_is_recognised_and_labelled_as_one() {
+        let catalogue = builtin().expect("built-in catalogue must validate");
+        for (decoy, family) in [
+            ("/tmp/claude", "claude-code"),
+            ("/opt/tools/claude", "claude-code"),
+            ("/tmp/x/ollama", "ollama"),
+            ("/home/u/Downloads/windsurf", "windsurf"),
+        ] {
+            assert_eq!(
+                recognise_in(catalogue, decoy).map(|f| f.id.as_str()),
+                Some(family),
+                "{decoy}"
+            );
+            assert_eq!(
+                identity_strength(family, decoy),
+                Some(IdentityStrength::NameOnly),
+                "{decoy}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_known_install_location_is_published_as_such() {
+        for (path, family) in [
+            ("/home/u/.local/share/claude/versions/2.1.3", "claude-code"),
+            (
+                "/usr/lib/node_modules/@anthropic-ai/claude-code/cli.js",
+                "claude-code",
+            ),
+            ("/usr/local/bin/ollama", "ollama"),
+            (
+                "/Applications/Ollama.app/Contents/Resources/ollama",
+                "ollama",
+            ),
+            ("/usr/share/windsurf/windsurf", "windsurf"),
+            (
+                "/home/u/.npm-global/lib/node_modules/opencode-ai/bin/opencode.exe",
+                "opencode",
+            ),
+        ] {
+            assert_eq!(
+                identity_strength(family, path),
+                Some(IdentityStrength::KnownInstallPath),
+                "{path}"
+            );
+        }
+        assert_eq!(identity_strength("not-a-family", "/usr/bin/x"), None);
+    }
+
+    #[test]
+    fn classification_never_promotes_a_name_only_match_to_known() {
+        assert_eq!(classify("/tmp/claude").0, IdentityClass::Suspected);
+        assert_eq!(classify("/usr/local/bin/ollama").0, IdentityClass::Known);
+        assert_eq!(classify("/tmp/codex").0, IdentityClass::Unknown);
+    }
+
+    #[test]
+    fn new_cli_families_require_install_evidence_to_be_known() {
+        for (installed, decoy, family) in [
+            (
+                "/home/u/.npm-global/lib/node_modules/@charmland/crush/crush",
+                "/tmp/crush",
+                "crush",
+            ),
+            (
+                "/home/u/.npm-global/lib/node_modules/@github/copilot/npm-loader.js",
+                "/tmp/copilot",
+                "github-copilot-cli",
+            ),
+            (
+                "/home/u/.npm-global/lib/node_modules/droid/bin/droid",
+                "/tmp/droid",
+                "factory-droid",
+            ),
+        ] {
+            let (installed_class, installed_family) = classify(installed);
+            assert_eq!(installed_class, IdentityClass::Known, "{installed}");
+            assert_eq!(
+                installed_family.map(|entry| entry.id.as_str()),
+                Some(family)
+            );
+
+            let (decoy_class, decoy_family) = classify(decoy);
+            assert_eq!(decoy_class, IdentityClass::Suspected, "{decoy}");
+            assert_eq!(decoy_family.map(|entry| entry.id.as_str()), Some(family));
+        }
+    }
+
+    /// A family with executables must say where it installs, or say that it
+    /// may be recognised without that. Silence is refused at load.
+    #[test]
+    fn a_family_without_install_paths_must_opt_in_to_name_only() {
+        let mut catalogue = builtin().expect("loads").clone();
+        let claude = catalogue
+            .families
+            .iter_mut()
+            .find(|f| f.id == "claude-code")
+            .expect("claude-code");
+        claude.path_markers.clear();
+        claude.name_only = false;
+        assert!(validate(&catalogue).is_err());
     }
 
     #[test]
@@ -408,6 +729,34 @@ mod tests {
             "/Users/testuser/Downloads/codex",
             "/usr/local/bin/codex",
             "/Applications/NotChatGPT.app/Contents/Resources/codex",
+        ] {
+            assert_eq!(recognise(impostor), None, "same-name decoy: {impostor}");
+        }
+    }
+
+    #[test]
+    fn every_zcode_install_shape_is_recognised_and_no_impostor_is() {
+        // Shapes from the 3.15.1 release: the AppImage runs from a FUSE mount
+        // named after the file, the deb installs under /opt, the dmg is an
+        // app bundle, and the Windows installer is per-user.
+        let catalogue = builtin().expect("built-in catalogue must validate");
+        let recognise = |path: &str| recognise_in(catalogue, path).map(|family| family.id.as_str());
+        for installed in [
+            "/tmp/.mount_ZCode-x8Kq2a/zcode",
+            "/opt/ZCode/zcode",
+            "/Applications/ZCode.app/Contents/MacOS/ZCode",
+            "/Applications/ZCode Preview.app/Contents/MacOS/ZCode",
+            "C:\\Users\\testuser\\AppData\\Local\\Programs\\ZCode\\ZCode.exe",
+        ] {
+            assert_eq!(recognise(installed), Some("zcode"), "{installed}");
+            assert_eq!(classify(installed).0, IdentityClass::Known, "{installed}");
+        }
+        for impostor in [
+            "/tmp/zcode",
+            "/home/testuser/Downloads/zcode",
+            "/usr/local/bin/zcode",
+            "/tmp/.mount_Other-x8Kq2a/zcode",
+            "/opt/zcode-helper",
         ] {
             assert_eq!(recognise(impostor), None, "same-name decoy: {impostor}");
         }

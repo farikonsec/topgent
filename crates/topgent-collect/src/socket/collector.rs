@@ -232,6 +232,7 @@ mod tests {
             uid: 501,
             user: "testuser".to_owned(),
             parent,
+            pid_namespace: None,
             family,
         };
         let owners = crate::process::agent_owners(&[

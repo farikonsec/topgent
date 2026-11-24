@@ -4,11 +4,12 @@
 // is usually the finding.
 
 import { $, el } from "../dom.mjs";
-import { session, view } from "../state.mjs";
+import { session, view, findAgent } from "../state.mjs";
 import { changeSort, makeTable, sortedBy } from "../table.mjs";
+import { openInspector } from "../inspector.mjs";
 
 export function renderAccess() {
-  const a = session.data.agents.find(x => x.pid === session.selected);
+  const a = findAgent(session.selected);
   const out = document.createDocumentFragment();
   if (!a) { out.append(el("div", { className: "empty", textContent: "Select an agent." })); $("access").replaceChildren(out); return; }
   const interesting = a.resources.filter(r => r.drift || r.latent_secret);
@@ -22,7 +23,20 @@ export function renderAccess() {
     if (r.latent_secret) { const f = el("span", { className: "flag", textContent: "CREDENTIAL" }); f.style.color="var(--crit)"; f.style.background="var(--critbg)"; first.append(" ", f); }
     const reach = el("td", { textContent: r.latent_secret ? "YES" : r.reachable });
     if (r.latent_secret) { reach.style.color="var(--crit)"; reach.style.fontWeight="600"; } else reach.className = "muted";
-    return el("tr", {}, [ first, el("td",{className:"muted",textContent:r.declared}), el("td",{className:"muted",textContent:r.observed}), reach, el("td",{className:"mono faint",textContent:(r.evidence||[]).join(" · ")}) ]);
+    const tr = el("tr", { className:"clickable" }, [ first, el("td",{className:"muted",textContent:r.declared}), el("td",{className:"muted",textContent:r.observed}), reach, el("td",{className:"mono faint",textContent:(r.evidence||[]).join(" · ")}) ]);
+    tr.onclick = () => openInspector({
+      title: r.path,
+      sevLabel: r.latent_secret ? "CREDENTIAL" : r.drift ? "OUT OF POLICY" : "",
+      sevClass: r.latent_secret ? "crit" : r.drift ? "high" : "",
+      plain: r.latent_secret ? "A credential this agent can reach." : r.drift ? "Reachable but not declared — out of policy." : "A resource this agent can reach.",
+      rows: [
+        ["declared", r.declared],
+        ["observed", r.observed],
+        ["reachable", r.latent_secret ? "YES" : r.reachable],
+        ["evidence", (r.evidence || []).join(" · ")],
+      ],
+    });
+    return tr;
   });
   out.append(makeTable("access", [
     { key:"path", label:"Resource", sortable:true }, { key:"declared", label:"Declared", sortable:true },

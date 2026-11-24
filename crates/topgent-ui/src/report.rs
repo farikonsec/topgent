@@ -8,6 +8,13 @@
 
 use serde::Deserialize;
 
+mod behaviour;
+mod flows;
+mod incidents;
+pub use behaviour::{Behaviour, Catalogue, Finding, RuleState};
+pub use flows::{AgentFlow, FlowDestination, FlowFolder};
+pub use incidents::{Incident, IncidentCoverage, IncidentKind};
+
 /// Read a value that the report may send as `null`.
 ///
 /// `#[serde(default)]` covers a field that is absent. It does not cover one
@@ -40,20 +47,56 @@ pub struct Report {
     /// When the sweep that produced this ran, in Unix milliseconds.
     #[serde(deserialize_with = "nullable")]
     pub generated_at: u64,
+    /// Executable layout, kernel and adjacent helper readiness.
+    pub deployment: Deployment,
+    /// Which operating system, on which architecture.
+    pub platform: Platform,
     /// The rules, each with the index the core's setter takes.
     pub watchlist: Vec<Rule>,
-    /// Every agent found.
+    /// Every agent found running in this sweep.
     pub agents: Vec<Agent>,
+    /// Agents seen earlier in this session and not running now, each as it
+    /// was last seen, most recently seen first.
+    pub ended_agents: Vec<Agent>,
+    /// Ended agents the session let go to stay bounded.
+    #[serde(deserialize_with = "nullable")]
+    pub ended_agents_evicted: u64,
     /// Collectors that could not run, and why.
     pub failures: Vec<Failure>,
     /// Every collector's health, whether or not it produced anything.
     pub sensors: Vec<Sensor>,
+    /// Prerequisites are distinct from a functioning prevention backend.
+    #[serde(deserialize_with = "nullable")]
+    pub interception: Interception,
     /// Which rules this host can detect, and how well.
     pub coverage: Vec<Coverage>,
     /// The security-change journal, newest first.
     pub events: Vec<Event>,
     /// Endpoint history, keyed by exact process identity.
     pub network: Vec<Endpoint>,
+    /// Every agent's recorded descendants, including those that have gone.
+    /// Absent from reports before S4.
+    pub process_history: Vec<ProcessRow>,
+    /// Audit file and network actions, including unresolved records.
+    pub observed_actions: Vec<ActionRow>,
+    /// Limits of the retained Audit action stream.
+    pub action_coverage: ActionCoverage,
+    /// Runtime behaviour rules and what they found.
+    #[serde(deserialize_with = "nullable")]
+    pub behaviour: Behaviour,
+    /// Workspace-exfiltration incidents, newest first. Absent from older
+    /// reports, so defaulted.
+    pub incidents: Vec<Incident>,
+    /// Whether this host can observe what the incident rule needs.
+    #[serde(deserialize_with = "nullable")]
+    pub incident_coverage: IncidentCoverage,
+    /// Where each agent sent data and what it read first, whether or not an
+    /// incident fired. Absent from older reports, and sent null when empty.
+    #[serde(deserialize_with = "nullable")]
+    pub agent_flows: Vec<AgentFlow>,
+    /// The named incidents this build can raise, with the rules behind each.
+    #[serde(deserialize_with = "nullable")]
+    pub incident_kinds: Vec<IncidentKind>,
     /// Every AI asset discovered.
     pub assets: Vec<Asset>,
     /// Bounded causal history.
@@ -66,6 +109,32 @@ pub struct Report {
     pub tools: Vec<Tool>,
     /// Whether the rules in force are the configured ones.
     pub policy_health: PolicyHealth,
+}
+
+/// Installed executable and helper layout.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Deployment {
+    /// Versioned install, portable/source run, or unknown.
+    #[serde(deserialize_with = "nullable")]
+    pub mode: String,
+    /// Running kernel release where available.
+    #[serde(deserialize_with = "nullable")]
+    pub kernel: String,
+    /// Narrow helper files expected beside the executable.
+    pub helpers: Vec<DeploymentHelper>,
+}
+
+/// One adjacent helper's package-level readiness.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct DeploymentHelper {
+    /// Binary name.
+    #[serde(deserialize_with = "nullable")]
+    pub name: String,
+    /// `ready`, `missing`, `unsafe_permissions`, or `exposed_to_other_users`.
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
 }
 
 /// One sensor binary, and how far it can be trusted.
@@ -104,6 +173,40 @@ pub struct PolicyHealth {
     pub path: String,
 }
 
+/// The operating system the report came from.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Platform {
+    /// `linux`, `macos`, `windows`.
+    pub os: String,
+    /// `aarch64`, `x86_64`.
+    pub arch: String,
+    /// The system's own name and version, when it says.
+    pub name: Option<String>,
+}
+
+impl Report {
+    /// The host's system, for the top of the window: its name, architecture
+    /// and kernel, as far as the report says.
+    #[must_use]
+    pub fn system_line(&self) -> String {
+        let name = self
+            .platform
+            .name
+            .clone()
+            .unwrap_or_else(|| self.platform.os.clone());
+        let mut parts = vec![name];
+        if !self.platform.arch.is_empty() {
+            parts.push(self.platform.arch.clone());
+        }
+        if !self.deployment.kernel.is_empty() {
+            parts.push(format!("kernel {}", self.deployment.kernel));
+        }
+        parts.retain(|p| !p.is_empty());
+        parts.join(" \u{b7} ")
+    }
+}
+
 /// One agent.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -111,6 +214,12 @@ pub struct Agent {
     /// Process id.
     #[serde(deserialize_with = "nullable")]
     pub pid: u32,
+    /// When this session first saw it, in Unix milliseconds.
+    pub first_seen: Option<u64>,
+    /// For an ended agent, when this session last saw it running.
+    pub last_seen: Option<u64>,
+    /// `false` for an agent that has ended; absent in older reports.
+    pub live: Option<bool>,
     /// When the operating system started this process, in Unix milliseconds.
     ///
     /// Half of the identity key, and the answer to "how long has this been
@@ -139,13 +248,127 @@ pub struct Agent {
     /// Descendant processes.
     pub children: Vec<Child>,
     /// Other agents this one can invoke. The edge nobody else draws.
-    pub invokes: Vec<String>,
+    pub invokes: Vec<Invocation>,
     /// Model in use, where one was declared.
     pub model: Option<String>,
+    /// Where the model was read and how much was read to find it. Absent in
+    /// reports from builds before S3, which said nothing about it.
+    pub model_evidence: Option<ModelEvidence>,
     /// Why identity is what it is: which facts the system gave up, and which
     /// it refused. A refused executable path means the process has not been
     /// ruled out as an agent, only that it was never examined.
     pub identity_evidence: IdentityEvidence,
+    /// The container it runs in, when its cgroup named one.
+    #[serde(default)]
+    pub container: Option<AgentContainer>,
+    /// What kind of product the family is: `agent`, `agent_editor` or
+    /// `model_runtime`. Absent for an unrecognised process.
+    pub kind: Option<String>,
+    /// Other models the agent used recently, as `provider/model`, newest first.
+    pub models_seen: Vec<String>,
+    /// The agent's risks in plain words, worst first.
+    pub summary: Option<Summary>,
+}
+
+/// An agent's risks as a person reads them, from the report's plain-words
+/// catalogue. The interface arranges these sentences and writes none of its own.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Summary {
+    /// `act`, `watch`, `info` or `none`: the worst level among the risks.
+    #[serde(deserialize_with = "nullable")]
+    pub level: String,
+    /// The level as a word, such as `Critical`.
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    /// The worst risk's headline.
+    #[serde(deserialize_with = "nullable")]
+    pub headline: String,
+    /// Whether any risk is something the agent did, not only could do.
+    #[serde(deserialize_with = "nullable")]
+    pub did_something: bool,
+    /// Every risk, worst first.
+    pub risks: Vec<SummaryRisk>,
+}
+
+/// One risk in plain words.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct SummaryRisk {
+    /// Stable identity, the same across agents.
+    #[serde(deserialize_with = "nullable")]
+    pub id: String,
+    /// `act`, `watch` or `info`.
+    #[serde(deserialize_with = "nullable")]
+    pub level: String,
+    /// The level as a word.
+    #[serde(deserialize_with = "nullable")]
+    pub label: String,
+    /// The risk in a few words.
+    #[serde(deserialize_with = "nullable")]
+    pub headline: String,
+}
+
+/// An agent's container: its short id, and its image when the runtime said.
+/// Reports from the first build with this field gave the id alone.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum AgentContainer {
+    /// `{"id": …, "image": …, "privileged": …}`.
+    Described {
+        /// Short id.
+        id: String,
+        /// Image repository, when the runtime said.
+        #[serde(default)]
+        image: Option<String>,
+    },
+    /// The id alone.
+    Id(String),
+}
+
+impl AgentContainer {
+    /// "container 047b9fcae3c1 (forgex)", or without the image when unknown.
+    #[must_use]
+    pub fn describe(&self) -> String {
+        match self {
+            Self::Described {
+                id,
+                image: Some(image),
+            } => format!("container {id} ({image})"),
+            Self::Described { id, image: None } | Self::Id(id) => format!("container {id}"),
+        }
+    }
+}
+
+/// One agent-to-agent invocation edge.
+///
+/// Current reports preserve the target pid and the mechanism. Older reports
+/// used a single display string, which remains readable for saved evidence.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Invocation {
+    /// Current structured report shape.
+    Detailed {
+        /// Invoked process.
+        target_pid: u32,
+        /// Mechanism that established the edge.
+        #[serde(deserialize_with = "nullable")]
+        via: String,
+    },
+    /// Historical report shape.
+    Legacy(String),
+}
+
+impl Invocation {
+    /// Compact text for the blast-radius panel.
+    #[must_use]
+    pub fn label(&self) -> String {
+        match self {
+            Self::Detailed { target_pid, via } if via.is_empty() => format!("pid {target_pid}"),
+            Self::Detailed { target_pid, via } => format!("pid {target_pid} via {via}"),
+            Self::Legacy(label) => label.clone(),
+        }
+    }
 }
 
 /// One scored finding.
@@ -191,9 +414,12 @@ pub struct Resource {
     /// The same, in the words a reader needs.
     #[serde(deserialize_with = "nullable")]
     pub reachable_statement: String,
-    /// Whether the path holds a credential.
+    /// A credential in reach that nothing has touched.
     #[serde(deserialize_with = "nullable")]
     pub latent_secret: bool,
+    /// Whether the path holds a credential, touched or not.
+    #[serde(deserialize_with = "nullable")]
+    pub sensitive: bool,
 }
 
 /// One collector that could not run.
@@ -208,20 +434,101 @@ pub struct Failure {
     pub reason: String,
 }
 
+impl Resource {
+    /// A credential readable now, whether or not anything has opened it.
+    #[must_use]
+    pub fn credential_in_reach(&self) -> bool {
+        self.sensitive && self.reachable == "yes"
+    }
+
+    /// A credential something was observed opening.
+    #[must_use]
+    pub fn credential_read(&self) -> bool {
+        self.sensitive && self.observed == "yes"
+    }
+}
+
 impl Report {
     /// The agent carrying the highest score, for the default selection.
     #[must_use]
     pub fn worst(&self) -> Option<&Agent> {
         self.agents.iter().max_by_key(|a| a.score)
     }
+
+    /// An agent by pid: a running one, else one that ended this session.
+    #[must_use]
+    pub fn find_agent(&self, pid: u32) -> Option<&Agent> {
+        self.agents
+            .iter()
+            .find(|a| a.pid == pid)
+            .or_else(|| self.ended_agents.iter().find(|a| a.pid == pid))
+    }
+
+    /// One run of an agent, running or ended: its pid, and its start when
+    /// the row knows it, so a reused pid is not taken for another run.
+    #[must_use]
+    pub fn agent_run(&self, pid: u32, started_at: Option<u64>) -> Option<&Agent> {
+        self.agents
+            .iter()
+            .chain(&self.ended_agents)
+            .find(|a| a.pid == pid && started_at.is_none_or(|at| at == a.started_at))
+    }
+
+    /// What a row that names an agent by family calls it: the run's family
+    /// and model when this report has the run, else the family the row gave.
+    #[must_use]
+    pub fn run_name(&self, pid: u32, started_at: Option<u64>, family: &str) -> String {
+        match self.agent_run(pid, started_at) {
+            Some(agent) => agent.named(),
+            None if family.is_empty() => "agent".to_owned(),
+            None => crate::brand::agent_name(Some(family)),
+        }
+    }
 }
 
 impl Agent {
+    /// Whether this agent ended earlier in the session.
+    #[must_use]
+    pub fn has_ended(&self) -> bool {
+        self.live == Some(false)
+    }
+
+    /// Running since when, or ended and last seen when: what happened, and
+    /// what is still happening, in the reader's local time.
+    #[must_use]
+    pub fn state_line(&self) -> String {
+        let started = crate::clock::stamp(self.started_at);
+        match (self.has_ended(), self.last_seen) {
+            (true, Some(last)) => format!(
+                "Ended \u{b7} ran {started} to {}",
+                crate::clock::stamp(last)
+            ),
+            (true, None) => format!("Ended \u{b7} started {started}"),
+            (false, _) => format!("Running since {started}"),
+        }
+    }
+
+    /// The agent and the model it runs on, as a column names it:
+    /// `opencode · deepseek-v4-flash`. The family alone when no model was
+    /// read.
+    #[must_use]
+    pub fn named(&self) -> String {
+        match self
+            .model
+            .as_deref()
+            .map(short_model)
+            .filter(|m| !m.is_empty())
+        {
+            Some(model) => format!("{} \u{b7} {model}", self.label()),
+            None => self.label(),
+        }
+    }
+
     /// What to show in the agent column when the family is unknown.
     #[must_use]
     pub fn label(&self) -> String {
         if let Some(family) = &self.family {
-            return family.clone();
+            return crate::brand::agent_name(Some(family));
         }
         // Not "not examined". These processes were examined; the core records
         // them as unrecognised, and the interface said the opposite. A monitor
@@ -238,12 +545,52 @@ impl Agent {
     /// What Topgent managed to establish about what this process is.
     #[must_use]
     pub fn recognition(&self) -> &'static str {
-        if self.family.is_some() {
-            "recognised"
-        } else if self.exe.is_some() {
-            "unrecognised"
-        } else {
-            "unreadable"
+        match self.identity_evidence.class.as_str() {
+            "known" => match self.identity_evidence.strength.as_deref() {
+                Some("known_install_path") => "known agent · install path",
+                Some("active_extension") => "known agent · active extension",
+                _ => "known agent",
+            },
+            "suspected" => "suspected agent · name only",
+            "unknown" if self.exe.is_some() => "unknown application · no family match",
+            "unknown" => "unknown application · executable unreadable",
+            // Compatibility with reports written before the S8 class field.
+            _ if self.family.is_some() => match self.identity_evidence.strength.as_deref() {
+                Some("known_install_path") => "known install path",
+                Some("name_only") => "name match only",
+                _ => "recognised",
+            },
+            _ if self.exe.is_some() => "unrecognised",
+            _ => "unreadable",
+        }
+    }
+
+    /// The model with how it was established, for the identity line.
+    #[must_use]
+    pub fn model_line(&self) -> String {
+        match (&self.model, &self.model_evidence) {
+            (Some(model), Some(evidence)) if !evidence.certainty.is_empty() => {
+                format!("{model} · {}", evidence.certainty)
+            }
+            (Some(model), _) => model.clone(),
+            (None, _) => "no model named in its own files".to_owned(),
+        }
+    }
+
+    /// Where the model came from, for the record.
+    #[must_use]
+    pub fn model_provenance(&self) -> String {
+        match (&self.model, &self.model_evidence) {
+            (Some(_), Some(evidence)) if !evidence.source.is_empty() => {
+                let how = if evidence.certainty == "observed" {
+                    "observed in"
+                } else {
+                    "declared in"
+                };
+                format!("{how} {}; read {}", evidence.source, evidence.read)
+            }
+            (Some(_), _) => "named in the agent's own files; source not reported".to_owned(),
+            (None, _) => "not found in the agent's files".to_owned(),
         }
     }
 }
@@ -486,6 +833,14 @@ pub struct Child {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct Sensor {
+    /// Evidence coverage, independent of sensor availability.
+    #[serde(deserialize_with = "nullable")]
+    pub collection_coverage: String,
+    /// Which sources of loss the counter measures.
+    #[serde(deserialize_with = "nullable")]
+    pub loss_accounting: String,
+    /// Unknown remains distinct from a measured zero.
+    pub dropped_events: Option<u64>,
     /// Collector name.
     #[serde(deserialize_with = "nullable")]
     pub id: String,
@@ -508,6 +863,18 @@ pub struct Sensor {
     /// How long the last run took.
     #[serde(deserialize_with = "nullable")]
     pub duration_ms: u64,
+}
+
+/// Runtime prevention status emitted by the collector probe.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct Interception {
+    /// Stable backend/prerequisite state; absence means unknown.
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
+    /// Why prevention is unavailable or which prerequisite is missing.
+    #[serde(deserialize_with = "nullable")]
+    pub detail: String,
 }
 
 /// One rule and whether this host can detect it.
@@ -544,6 +911,8 @@ pub struct Event {
     /// Process id.
     #[serde(deserialize_with = "nullable")]
     pub pid: u32,
+    /// When that process started.
+    pub started_at: Option<u64>,
     /// In words.
     #[serde(deserialize_with = "nullable")]
     pub detail: String,
@@ -553,6 +922,68 @@ pub struct Event {
     /// Whether a grade moved up or down. A reduction must never read as an
     /// escalation, which is why direction is carried rather than inferred.
     pub direction: Option<String>,
+}
+
+/// One recorded descendant of an agent.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ProcessRow {
+    /// The agent it belongs to.
+    #[serde(deserialize_with = "nullable")]
+    pub agent_pid: u32,
+    /// Hops below the agent: 1 for a child, 2 for a grandchild.
+    #[serde(deserialize_with = "nullable")]
+    pub depth: u32,
+    /// Its program's path, when it was read.
+    pub exe: Option<String>,
+    /// Its pid.
+    #[serde(deserialize_with = "nullable")]
+    pub pid: u32,
+    /// When the kernel started it.
+    #[serde(deserialize_with = "nullable")]
+    pub started_at: u64,
+    /// Its name.
+    #[serde(deserialize_with = "nullable")]
+    pub name: String,
+    /// The parent it started with, when resolved.
+    pub parent_pid: Option<u32>,
+    /// `running`, `gone`, or `exited`.
+    #[serde(deserialize_with = "nullable")]
+    pub state: String,
+    /// First sighting.
+    #[serde(deserialize_with = "nullable")]
+    pub first_seen: u64,
+    /// Latest sighting.
+    #[serde(deserialize_with = "nullable")]
+    pub last_seen: u64,
+    /// The first sighting that no longer found it.
+    pub gone_after: Option<u64>,
+    /// When it exited, from an exit record.
+    pub exited_at: Option<u64>,
+    /// Its exit status, from an exit record.
+    pub exit_code: Option<u32>,
+    /// `kernel_event` when the kernel reported it as it happened, `sweep`
+    /// when only a sweep saw it running. Absent before S5.
+    pub observed_by: Option<String>,
+    /// Whether another process adopted it.
+    #[serde(deserialize_with = "nullable")]
+    pub reparented: bool,
+    /// Whether it runs in a different pid namespace from its parent.
+    #[serde(deserialize_with = "nullable")]
+    pub crossed_namespace: bool,
+    /// How many times it replaced its program.
+    #[serde(deserialize_with = "nullable")]
+    pub exec_generation: u32,
+    /// Whether its last exec was gone before the program could be read.
+    /// Absent before S5.
+    #[serde(deserialize_with = "nullable")]
+    pub program_unread: bool,
+    /// Its current program's name.
+    pub program: Option<String>,
+    /// Programs it ran before, oldest first.
+    pub previous_programs: Vec<String>,
+    /// Parents between it and its agent, nearest first.
+    pub chain: Vec<u32>,
 }
 
 /// One endpoint an agent was seen using.
@@ -565,6 +996,8 @@ pub struct Endpoint {
     /// Owning process id.
     #[serde(deserialize_with = "nullable")]
     pub agent_pid: u32,
+    /// When that agent started, which tells its run from a reused pid.
+    pub agent_started_at: Option<u64>,
     /// Which protocol carries it.
     #[serde(deserialize_with = "nullable")]
     pub protocol: String,
@@ -590,12 +1023,26 @@ pub struct Endpoint {
     pub currently_observed: bool,
     /// Resolved name, where one was available.
     pub dns_name: Option<String>,
+    /// Country from the report's offline ownership table.
+    #[serde(deserialize_with = "nullable")]
+    pub country: String,
+    /// Announcing network from the report's offline ownership table.
+    #[serde(deserialize_with = "nullable")]
+    pub network_owner: String,
+    /// Whether the ownership table had an answer.
+    #[serde(deserialize_with = "nullable")]
+    pub owner_known: bool,
+    /// Number of sweeps in which this endpoint was visible.
+    #[serde(deserialize_with = "nullable")]
+    pub observations: u64,
     /// Packets a capture counted moving to or from here.
     ///
     /// `None` where no capture ran or none saw this destination. Never zero,
     /// and never a count of how often a sweep saw the endpoint: those are
     /// observations, and the difference is the whole point of capturing.
     pub packets: Option<u64>,
+    /// Traffic bytes when a sensor can count them.
+    pub bytes: Option<u64>,
 }
 
 /// One discovered AI asset.
@@ -706,6 +1153,8 @@ pub struct Decision {
     /// That agent's process.
     #[serde(deserialize_with = "nullable")]
     pub agent_pid: u32,
+    /// When that agent started.
+    pub agent_started_at: Option<u64>,
     /// The mode the rule asked for.
     #[serde(deserialize_with = "nullable")]
     pub requested: String,
@@ -782,13 +1231,34 @@ pub struct ContextRecord {
     pub matched: bool,
 }
 
+/// The evidence behind an agent's model.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ModelEvidence {
+    /// `observed` in the running session's own output, or `declared` in a
+    /// configuration it may have overridden.
+    #[serde(deserialize_with = "nullable")]
+    pub certainty: String,
+    /// The file or flag, in its `~` form.
+    #[serde(deserialize_with = "nullable")]
+    pub source: String,
+    /// How much was read, in plain words.
+    #[serde(deserialize_with = "nullable")]
+    pub read: String,
+}
+
 /// What the operating system did and did not say about a process.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct IdentityEvidence {
-    /// `confirmed`, `unexamined`, or `unrecognised`. Three different claims.
+    /// Product-level identity class: `known`, `suspected`, or `unknown`.
+    #[serde(deserialize_with = "nullable")]
+    pub class: String,
+    /// `confirmed`, `name_only`, `unexamined`, or `unrecognised`.
     #[serde(deserialize_with = "nullable")]
     pub state: String,
+    /// What a recognition rests on: `known_install_path` or `name_only`.
+    pub strength: Option<String>,
     /// Whether the executable path was readable.
     #[serde(deserialize_with = "nullable")]
     pub exe_path_known: bool,
@@ -806,7 +1276,35 @@ pub struct IdentityEvidence {
 mod tests {
     #![allow(clippy::panic, clippy::expect_used, clippy::unwrap_used)]
 
-    use super::Report;
+    use super::{Invocation, Report};
+
+    #[test]
+    fn coverage_and_prevention_preserve_unknown_in_old_and_new_reports() {
+        for source in [
+            "{}",
+            r#"{"interception":null,"sensors":[{"dropped_events":null}]}"#,
+        ] {
+            let parsed: Report = serde_json::from_str(source).expect("old report readable");
+            assert!(parsed.interception.state.is_empty());
+            assert!(
+                parsed
+                    .sensors
+                    .iter()
+                    .all(|sensor| sensor.dropped_events.is_none())
+            );
+        }
+        let parsed: Report = serde_json::from_str(r#"{"interception":{"state":"not_installed","detail":"no interception backend"},"sensors":[{"collection_coverage":"snapshot_only","loss_accounting":"Accumulator only","dropped_events":0,"fact_count":7},{"dropped_events":3}]}"#).expect("new report readable");
+        let sensor = parsed.sensors.first().expect("sensor");
+        assert_eq!(sensor.dropped_events, Some(0));
+        assert_eq!(sensor.collection_coverage, "snapshot_only");
+        assert_eq!(sensor.loss_accounting, "Accumulator only");
+        assert_eq!(sensor.fact_count, 7);
+        assert_eq!(parsed.interception.state, "not_installed");
+        assert_eq!(
+            parsed.sensors.last().expect("loss row").dropped_events,
+            Some(3)
+        );
+    }
 
     /// The regression this exists for.
     ///
@@ -852,6 +1350,11 @@ mod tests {
         // A sensor row that says nothing is the green-row-meaning-no-coverage
         // failure this product exists to prevent.
         for sensor in &parsed.sensors {
+            assert!(
+                !sensor.collection_coverage.is_empty(),
+                "missing coverage contract"
+            );
+            assert!(!sensor.loss_accounting.is_empty(), "missing loss scope");
             assert!(!sensor.id.is_empty(), "a sensor arrived with no name");
             assert!(
                 !sensor.state.is_empty(),
@@ -859,6 +1362,9 @@ mod tests {
                 sensor.id
             );
         }
+
+        assert!(!parsed.interception.state.is_empty());
+        assert!(!parsed.interception.detail.is_empty());
 
         // This is the one that failed. Three of these field names were
         // invented and the panel printed empty separators for months.
@@ -910,4 +1416,79 @@ mod tests {
         });
         assert!(serde_json::from_value::<Report>(json).is_ok());
     }
+
+    #[test]
+    fn stopped_agent_invocation_edges_accept_current_and_saved_report_shapes() {
+        let json = serde_json::json!({
+            "agents": [{
+                "pid": 8907,
+                "invokes": [
+                    {"target_pid": 8429, "via": "Bash(opencode run)"},
+                    "legacy child agent"
+                ]
+            }]
+        });
+        let report: Report = serde_json::from_value(json).expect("report remains readable");
+        let invokes = &report.agents.first().expect("agent").invokes;
+        assert_eq!(invokes.len(), 2);
+        assert_eq!(
+            invokes.first().map(Invocation::label).as_deref(),
+            Some("pid 8429 via Bash(opencode run)")
+        );
+        assert_eq!(
+            invokes.last().map(Invocation::label).as_deref(),
+            Some("legacy child agent")
+        );
+    }
+}
+
+/// One retained syscall observation and its event-time attribution.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ActionRow {
+    /// Agent owning the actor, absent when unresolved.
+    pub agent_pid: Option<u32>,
+    /// Exact agent instance.
+    pub agent_started_at: Option<u64>,
+    /// Direct syscall actor.
+    pub actor_pid: u32,
+    /// Exact actor instance, when resolved.
+    pub actor_started_at: Option<u64>,
+    /// Executable named by Audit, rather than a later snapshot.
+    #[serde(deserialize_with = "nullable")]
+    pub actor_name: String,
+    /// Latest known actor state.
+    #[serde(deserialize_with = "nullable")]
+    pub actor_state: String,
+    /// Syscall category.
+    pub action: String,
+    /// File path or addressed endpoint.
+    pub target: String,
+    /// Actual syscall result.
+    pub result: String,
+    /// Wall-clock time of the record.
+    pub at: u64,
+    /// Original Audit record id.
+    pub record: String,
+    /// Agent child through direct actor.
+    pub chain: Vec<u32>,
+}
+
+/// Audit visibility and bounded-history limits.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ActionCoverage {
+    /// Measured handover drops in this sweep, excluding upstream losses.
+    pub queue_losses: u64,
+    /// Records removed by the retention bound.
+    pub evicted: u64,
+    /// What the sensor cannot establish.
+    pub detail: String,
+}
+
+/// A model's name without its route: `openrouter/z-ai/glm-4.7-flash` is
+/// `glm-4.7-flash`. The full name stays in the agent's details.
+#[must_use]
+pub fn short_model(model: &str) -> &str {
+    model.rsplit('/').next().unwrap_or(model).trim()
 }

@@ -30,3 +30,11 @@ path = "tests/firing_equivalence.rs"
 [[test]]
 name = "item_views"
 path = "tests/item_views.rs"
+
+[[test]]
+name = "lineage"
+path = "tests/lineage.rs"
+
+[[test]]
+name = "attributed"
+path = "tests/attributed.rs"

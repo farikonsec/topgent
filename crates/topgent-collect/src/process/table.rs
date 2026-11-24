@@ -34,6 +34,8 @@ pub struct ProcInfo {
     pub user: String,
     /// Parent process, when there is one.
     pub parent: Option<u32>,
+    /// Its pid namespace, where the platform names one.
+    pub pid_namespace: Option<u64>,
     /// Recognised agent family, when the executable is one we know.
     pub family: Option<&'static str>,
     /// Who the process runs as, in the platform's own terms.
@@ -66,6 +68,110 @@ pub fn family_of(exe_name: &str) -> Option<&'static str> {
     crate::signatures::recognise(exe_name).map(|family| family.id.as_str())
 }
 
+/// The start time field of a `/proc/<pid>/stat` line, in clock ticks since
+/// boot.
+///
+/// The command name sits in parentheses and may itself contain spaces and
+/// parentheses, so fields are counted from the last `)`. Field 22 overall is
+/// the 20th after it.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn stat_start_ticks(stat: &str) -> Option<u64> {
+    stat.rsplit_once(')')?
+        .1
+        .split_ascii_whitespace()
+        .nth(19)?
+        .parse()
+        .ok()
+}
+
+/// Wall-clock start from boot time and ticks. `None` for a zero tick rate.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn start_millis(boot_seconds: u64, ticks: u64, per_second: u64) -> Option<u64> {
+    let since_boot = ticks.checked_mul(1_000)?.checked_div(per_second)?;
+    boot_seconds.checked_mul(1_000)?.checked_add(since_boot)
+}
+
+/// The inode in a `pid:[4026531836]` namespace link.
+#[cfg(any(target_os = "linux", test))]
+pub(crate) fn namespace_inode(link: &str) -> Option<u64> {
+    link.strip_prefix("pid:[")?.strip_suffix(']')?.parse().ok()
+}
+
+/// When the system booted, in Unix seconds, from `/proc/stat`.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn boot_seconds() -> Option<u64> {
+    std::fs::read_to_string("/proc/stat")
+        .ok()?
+        .lines()
+        .find_map(|line| line.strip_prefix("btime "))?
+        .trim()
+        .parse()
+        .ok()
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn boot_seconds() -> Option<u64> {
+    None
+}
+
+/// The start `/proc` would have given a process created at `at`, for one
+/// that was gone before its start could be read.
+///
+/// `/proc` states a start in whole clock ticks since boot, so every start
+/// read from it sits on a 10 ms grid (at the usual 100 ticks a second).
+/// Event times do not. A process keyed by its precise event time would sort
+/// after a child keyed by `/proc`'s rounded one, and the child would appear
+/// to start before its parent and be dropped. Putting both on the same grid
+/// keeps parent before child. `at` must be in the same base as
+/// [`kernel_start`]: boot seconds in milliseconds plus time since boot.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn start_from_event(at: u64, boot: Option<u64>) -> u64 {
+    boot.and_then(|boot| on_tick_grid(at, boot, rustix::param::clock_ticks_per_second()))
+        .unwrap_or(at)
+}
+
+/// `at` floored to the tick grid [`start_millis`] produces.
+#[cfg(any(target_os = "linux", test))]
+fn on_tick_grid(at: u64, boot_seconds: u64, per_second: u64) -> Option<u64> {
+    let since_boot = at.checked_sub(boot_seconds.checked_mul(1_000)?)?;
+    let ticks = since_boot.checked_mul(per_second)?.checked_div(1_000)?;
+    start_millis(boot_seconds, ticks, per_second)
+}
+
+/// A process's start time to the clock tick, from `/proc/<pid>/stat`.
+#[cfg(target_os = "linux")]
+#[must_use]
+pub fn kernel_start(pid: u32, boot: Option<u64>) -> Option<UnixMillis> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let millis = start_millis(
+        boot?,
+        stat_start_ticks(&stat)?,
+        rustix::param::clock_ticks_per_second(),
+    )?;
+    Some(UnixMillis(millis))
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn kernel_start(_pid: u32, _boot: Option<u64>) -> Option<UnixMillis> {
+    None
+}
+
+#[cfg(target_os = "linux")]
+fn pid_namespace(pid: u32) -> Option<u64> {
+    namespace_inode(
+        std::fs::read_link(format!("/proc/{pid}/ns/pid"))
+            .ok()?
+            .to_str()?,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
+const fn pid_namespace(_pid: u32) -> Option<u64> {
+    None
+}
+
 /// What is printed where the operating system named no owner.
 ///
 /// Never a number. `0` is root's uid, and an unanswerable question rendering as
@@ -96,12 +202,73 @@ fn resolved(path: &std::path::Path) -> String {
         .to_string()
 }
 
+thread_local! {
+    static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static SHARED: std::cell::RefCell<Shared> = const { std::cell::RefCell::new(Shared::Outside) };
+}
+
+/// The walk shared by one sweep.
+enum Shared {
+    /// No sweep is running; every caller walks.
+    Outside,
+    /// A sweep is running and nothing has asked yet.
+    Unwalked,
+    /// A sweep is running and this is its walk.
+    Walked(Vec<ProcInfo>),
+}
+
+/// Runs one sweep with a single, shared walk of the process table.
+///
+/// Every collector used to walk the table for itself: about eight walks per
+/// sweep, each of a slightly different moment, so one collector could attribute
+/// to a process another had not seen. Inside this scope the first caller walks
+/// and the rest are handed the same view. The scope ends with the sweep, even
+/// on a panic, so nothing outside it, and in particular no response deciding
+/// whether a process may be signalled, is ever handed a stale table.
+pub(crate) fn within_sweep<T>(run: impl FnOnce() -> T) -> T {
+    struct Scope;
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            SHARED.with(|shared| *shared.borrow_mut() = Shared::Outside);
+        }
+    }
+    SHARED.with(|shared| *shared.borrow_mut() = Shared::Unwalked);
+    let _scope = Scope;
+    run()
+}
+
+/// How many times this thread has walked the process table. For tests and the
+/// sweep benchmark; it counts, and changes nothing.
+#[must_use]
+pub fn walks() -> usize {
+    WALKS.with(std::cell::Cell::get)
+}
+
 /// Every process this user can see, as Topgent models it.
 ///
 /// Shared by the collectors that need process context, so the machine is walked
 /// once rather than once per collector.
 #[must_use]
 pub fn snapshot() -> Vec<ProcInfo> {
+    let reused = SHARED.with(|shared| match &*shared.borrow() {
+        Shared::Walked(processes) => Some(processes.clone()),
+        Shared::Outside | Shared::Unwalked => None,
+    });
+    if let Some(processes) = reused {
+        return processes;
+    }
+    let walked = walk();
+    SHARED.with(|shared| {
+        let mut shared = shared.borrow_mut();
+        if matches!(*shared, Shared::Unwalked) {
+            *shared = Shared::Walked(walked.clone());
+        }
+    });
+    walked
+}
+
+fn walk() -> Vec<ProcInfo> {
+    WALKS.with(|walks| walks.set(walks.get() + 1));
     let mut sys = System::new();
     sys.refresh_processes_specifics(
         ProcessesToUpdate::All,
@@ -114,6 +281,7 @@ pub fn snapshot() -> Vec<ProcInfo> {
             .with_user(sysinfo::UpdateKind::Always),
     );
     let users = Users::new_with_refreshed_list();
+    let boot = boot_seconds();
 
     let mut out: Vec<ProcInfo> = sys
         .processes()
@@ -185,8 +353,13 @@ pub fn snapshot() -> Vec<ProcInfo> {
             let user = named.map_or_else(|| UNKNOWN_OWNER.to_owned(), |u| u.name().to_owned());
             ProcInfo {
                 pid: pid.as_u32(),
-                // sysinfo reports start time in whole seconds.
-                started_at: UnixMillis(p.start_time().saturating_mul(1_000)),
+                // sysinfo reports start time in whole seconds, which makes two
+                // runs of one pid inside the same second a single identity.
+                // Linux states it to the clock tick, and that is used where it
+                // can be read.
+                started_at: kernel_start(pid.as_u32(), boot)
+                    .unwrap_or(UnixMillis(p.start_time().saturating_mul(1_000))),
+                pid_namespace: pid_namespace(pid.as_u32()),
                 family,
                 // An owner the operating system did not state is unknown, not
                 // root. Reading absence as uid zero made a host that reports no
@@ -256,6 +429,31 @@ pub(super) fn descendants_of(root: u32, procs: &[ProcInfo]) -> Vec<(&ProcInfo, u
 mod tests {
     #![allow(clippy::expect_used, clippy::unwrap_used)]
 
+    /// A real Kali stat line, and one whose command name is built to confuse
+    /// a parser that splits on the first `)`.
+    #[test]
+    fn the_start_time_is_read_to_the_clock_tick() {
+        use super::{namespace_inode, start_millis, stat_start_ticks};
+        let kali = "1648471 (python) S 1648465 1648471 1648465 0 -1 4194560 3082 0 0 0 5 2 0 0 20 0 1 0 186734203 25415680 3044 18446744073709551615 1 1 0 0 0 0 0 16781312 2 0 0 0 17 3 0 0 0 0 0";
+        assert_eq!(stat_start_ticks(kali), Some(186_734_203));
+        let hostile = "42 (a) S 1 (b) c) R 1 42 1 0 -1 0 0 0 0 0 0 0 0 0 20 0 1 0 777 0 0";
+        assert_eq!(stat_start_ticks(hostile), Some(777));
+        assert_eq!(stat_start_ticks("42 (no fields)"), None);
+        // Ten milliseconds per tick at the usual 100 Hz: two starts one tick
+        // apart are two identities, where whole seconds made them one.
+        assert_eq!(
+            start_millis(1_790_000_000, 186_734_203, 100),
+            Some(1_791_867_342_030)
+        );
+        assert_ne!(
+            start_millis(1_790_000_000, 101, 100),
+            start_millis(1_790_000_000, 102, 100)
+        );
+        assert_eq!(start_millis(1, 1, 0), None);
+        assert_eq!(namespace_inode("pid:[4026531836]"), Some(4_026_531_836));
+        assert_eq!(namespace_inode("net:[4026531836]"), None);
+    }
+
     #[test]
     fn a_refused_executable_path_is_recorded_as_refused_not_as_a_verdict() {
         // Family recognition reads the path. A process whose path the system
@@ -284,5 +482,29 @@ mod tests {
                 "a refused path falls back to the name and invents nothing"
             );
         }
+    }
+
+    #[test]
+    fn an_event_time_lands_on_the_same_tick_grid_as_proc_starts() {
+        use super::{on_tick_grid, start_millis};
+        let boot = 1_790_000_000;
+        // 12.345 s after boot, at 100 ticks a second, is tick 1234: 12.340 s.
+        assert_eq!(
+            on_tick_grid(boot * 1_000 + 12_345, boot, 100),
+            Some(boot * 1_000 + 12_340)
+        );
+        // Already on the grid: unchanged.
+        assert_eq!(
+            on_tick_grid(boot * 1_000 + 12_340, boot, 100),
+            Some(boot * 1_000 + 12_340)
+        );
+        // Every result is a start `start_millis` could have produced.
+        for at in (boot * 1_000..boot * 1_000 + 50).step_by(3) {
+            let floored = on_tick_grid(at, boot, 100).expect("on the grid");
+            let ticks = (floored - boot * 1_000) / 10;
+            assert_eq!(start_millis(boot, ticks, 100), Some(floored));
+            assert!(floored <= at);
+        }
+        assert_eq!(on_tick_grid(5, boot, 100), None, "before boot");
     }
 }

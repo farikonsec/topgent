@@ -21,6 +21,26 @@ import { dirname, join } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
+test("each web theme is the desktop palette of the same name", () => {
+  // The desktop's theme.rs is the source; a colour changed there and not
+  // here would make one finding two colours depending on the window.
+  const rust = readFileSync(join(here, "..", "crates", "topgent-ui", "src", "theme.rs"), "utf8");
+  const css = readFileSync(join(here, "ui", "styles.css"), "utf8");
+  const hex = (r, g, b) => `#${[r, g, b].map(v => v.slice(2).toUpperCase()).join("")}`;
+  const palettes = { dark: "Self::Dark", light: "Self::Light", "high-contrast": "Self::HighContrast" };
+  const tokens = { background:"--bg", surface:"--surf", border:"--bd", text:"--tx", muted:"--tx2",
+    faint:"--tx3", accent:"--ac", critical:"--crit", high:"--high", medium:"--med", low:"--low" };
+  for (const [theme, arm] of Object.entries(palettes)) {
+    const body = rust.split(`${arm} => Palette {`)[1].split("},")[0];
+    const block = css.split(`:root[data-theme="${theme}"]`)[1].split("}")[0];
+    for (const [field, token] of Object.entries(tokens)) {
+      const m = body.match(new RegExp(`${field}: rgb\\((0x[0-9a-f]{2}), (0x[0-9a-f]{2}), (0x[0-9a-f]{2})\\)`));
+      assert.ok(m, `${theme}: ${field} not found in theme.rs`);
+      assert.match(block, new RegExp(`${token}:${hex(m[1], m[2], m[3])};`), `${theme}: ${token} is not the desktop's ${field}`);
+    }
+  }
+});
+
 function stubElement() {
   const node = {
     style: {},

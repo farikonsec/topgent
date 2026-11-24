@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "note": "Named incidents built from behaviour-rule findings that are attributed to an agent run. One card per incident kind per run. A rule listed here that cannot fire on a host is reported as such by the catalogue coverage; the card never implies it was watched.",
+  "incidents": [
+    {
+      "id": "sandbox_escape",
+      "name": "Container Escape",
+      "severity": "critical",
+      "verb": "attempted a container escape",
+      "rules": [
+        "Detect release_agent File Container Escapes",
+        "Mount Launched in Privileged Container",
+        "Change namespace privileges via unshare",
+        "Change thread namespace",
+        "Linux Kernel Module Injection Detected",
+        "Debugfs Launched in Privileged Container",
+        "Container Access to Host Sensitive Paths",
+        "Privileged Container Device Access"
+      ],
+      "why": [
+        "A coding agent has no need to change namespaces, mount devices, load kernel modules or write a cgroup release agent.",
+        "Each of these is a known step for leaving a container or sandbox and acting on the host."
+      ],
+      "actions": [
+        "Stop the agent and the container it ran in.",
+        "Check the host for new files, mounts, kernel modules and processes started after the time shown.",
+        "Rebuild the container from a known image rather than reusing it."
+      ]
+    },
+    {
+      "id": "remote_control",
+      "name": "Command & Control",
+      "severity": "critical",
+      "verb": "opened a remote-control channel",
+      "rules": [
+        "Redirect STDOUT/STDIN to Network Connection in Container",
+        "Netcat Remote Code Execution in Container",
+        "Netcat/Socat Remote Code Execution on Host",
+        "Reverse Shell from Web Server",
+        "Fileless execution via memfd_create",
+        "Execution from /dev/shm"
+      ],
+      "why": [
+        "A shell wired to a network connection lets whoever is on the other end run commands as this user.",
+        "Running a program from memory or /dev/shm is how a payload avoids leaving a file on disk."
+      ],
+      "actions": [
+        "Stop the agent and any shell or network tool it started.",
+        "Look at the Network tab for the address the shell was connected to, and block it.",
+        "Treat anything the user could reach as exposed from the time shown."
+      ]
+    },
+    {
+      "id": "persistence",
+      "name": "Persistence",
+      "severity": "high",
+      "verb": "established persistence",
+      "rules": [
+        "Schedule Cron Jobs",
+        "Modify Shell Configuration File",
+        "Adding ssh keys to authorized_keys",
+        "Create Symlink Over Sensitive Files",
+        "Create Hardlink Over Sensitive Files"
+      ],
+      "why": [
+        "A scheduled job, a changed shell start-up file or a new SSH key keeps working after the agent stops.",
+        "These are the usual ways to come back to a machine without asking again."
+      ],
+      "actions": [
+        "Check crontab, your shell start-up files and ~/.ssh/authorized_keys for entries you did not add, and remove them.",
+        "Stop the agent until you know why it made the change."
+      ]
+    },
+    {
+      "id": "privilege_escalation",
+      "name": "Privilege Escalation",
+      "severity": "critical",
+      "verb": "attempted privilege escalation",
+      "rules": [
+        "Sudo Potential Privilege Escalation",
+        "Polkit Local Privilege Escalation Vulnerability (CVE-2021-4034)",
+        "Non sudo setuid",
+        "Set Setuid or Setgid bit",
+        "Potential Local Privilege Escalation via Environment Variables Misuse",
+        "PTRACE attached to process"
+      ],
+      "why": [
+        "Setting a setuid bit, abusing sudo or polkit, or attaching to another process are ways to act as root or as another program.",
+        "An agent that gains root can read and change anything on the machine."
+      ],
+      "actions": [
+        "Stop the agent.",
+        "Look for new setuid files and remove any you did not create: find / -perm -4000 -newer /etc/hostname 2>/dev/null",
+        "Patch sudo and polkit if the rule names a known vulnerability."
+      ]
+    },
+    {
+      "id": "covering_tracks",
+      "name": "Log Tampering",
+      "severity": "high",
+      "verb": "cleared logs or shell history",
+      "rules": [
+        "Clear Log Activities",
+        "Delete or rename shell history"
+      ],
+      "why": [
+        "Clearing logs or shell history removes the record a person would use to see what was done.",
+        "It is rarely needed for coding work, and often follows something else worth hiding."
+      ],
+      "actions": [
+        "Look at the other incidents and findings for this agent around the same time.",
+        "Keep Topgent's own event log: it is kept separately and was not touched by this."
+      ]
+    },
+    {
+      "id": "crypto_mining",
+      "name": "Cryptomining",
+      "severity": "critical",
+      "verb": "ran or contacted a cryptominer",
+      "rules": [
+        "Detect outbound connections to common miner pool ports",
+        "Detect crypto miners using the Stratum protocol",
+        "Known Cryptominer Process Executed"
+      ],
+      "why": [
+        "A miner uses this machine's power for someone else's benefit.",
+        "It usually arrives through a compromised package or a prompt-injected agent."
+      ],
+      "actions": [
+        "Stop the agent and the miner process.",
+        "Check what the agent installed or downloaded before the time shown."
+      ]
+    },
+    {
+      "id": "credential_hunting",
+      "name": "Credential Access",
+      "severity": "high",
+      "verb": "searched for or opened credentials",
+      "rules": [
+        "Search Private Keys or Passwords",
+        "Find AWS Credentials",
+        "Read ssh information",
+        "Read sensitive file untrusted",
+        "Directory traversal monitored file read",
+        "Read environment variable from /proc files"
+      ],
+      "why": [
+        "Keys, tokens and passwords are what someone needs to act as you elsewhere.",
+        "A coding task rarely needs to search for them or read another program's secrets."
+      ],
+      "actions": [
+        "Check the Files tab for this agent: what it read and where its data went afterwards.",
+        "Rotate any credential named here if the agent also sent data out."
+      ]
+    }
+  ],
+  "limits": [
+    "This is based on behaviour rules that matched the agent's system calls. Topgent saw the calls, not the intent behind them.",
+    "A rule that cannot fire on this host is listed under Coverage. Behaviour it covers is not reported here."
+  ]
+}

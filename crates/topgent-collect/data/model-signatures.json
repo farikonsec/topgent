@@ -71,6 +71,121 @@
       "match": "prefix",
       "value": "kimi",
       "provider": "moonshot"
+    },
+    {
+      "match": "prefix",
+      "value": "o4",
+      "provider": "openai"
+    },
+    {
+      "match": "prefix",
+      "value": "gemma",
+      "provider": "google"
+    },
+    {
+      "match": "prefix",
+      "value": "nemotron",
+      "provider": "nvidia"
+    },
+    {
+      "match": "prefix",
+      "value": "codestral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "devstral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "ministral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "magistral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "mixtral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "pixtral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "voxtral",
+      "provider": "mistral"
+    },
+    {
+      "match": "prefix",
+      "value": "nova",
+      "provider": "amazon"
+    },
+    {
+      "match": "prefix",
+      "value": "command",
+      "provider": "cohere"
+    },
+    {
+      "match": "prefix",
+      "value": "minimax",
+      "provider": "minimax"
+    },
+    {
+      "match": "prefix",
+      "value": "sonar",
+      "provider": "perplexity"
+    },
+    {
+      "match": "prefix",
+      "value": "inkling",
+      "provider": "thinkingmachines"
+    },
+    {
+      "match": "prefix",
+      "value": "mimo",
+      "provider": "xiaomi"
+    },
+    {
+      "match": "prefix",
+      "value": "ernie",
+      "provider": "baidu"
+    },
+    {
+      "match": "prefix",
+      "value": "phi",
+      "provider": "microsoft"
+    },
+    {
+      "match": "prefix",
+      "value": "granite",
+      "provider": "ibm"
+    },
+    {
+      "match": "prefix",
+      "value": "hermes",
+      "provider": "nousresearch"
+    },
+    {
+      "match": "prefix",
+      "value": "lfm",
+      "provider": "liquid"
+    },
+    {
+      "match": "prefix",
+      "value": "solar",
+      "provider": "upstage"
+    },
+    {
+      "match": "prefix",
+      "value": "reka",
+      "provider": "reka"
     }
   ],
   "families": [
@@ -83,7 +198,8 @@
           "path": ".claude/projects/*/*.jsonl",
           "key": "model",
           "certainty": "observed",
-          "note": "The session transcript Claude Code writes while it runs. It records the model that answered, so it survives a config the user overrode at the prompt."
+          "note": "The session transcript Claude Code writes while it runs. It records the model that answered, so it survives a config the user overrode at the prompt.",
+          "session": "claude_project"
         },
         {
           "kind": "json",
@@ -104,6 +220,20 @@
       "family": "codex-cli",
       "default_provider": "openai",
       "sources": [
+        {
+          "kind": "marker",
+          "path": ".codex/logs_*.sqlite-wal",
+          "key": "model=",
+          "certainty": "observed",
+          "note": "Codex logs every sampling request as a tracing span with model=<name>. The newest one in the write-ahead log is the model the last turn used, which the ChatGPT app can change per chat without touching config.toml. Shared by every Codex process on the host, so it names the latest turn, not a given process's."
+        },
+        {
+          "kind": "marker",
+          "path": ".codex/logs_*.sqlite",
+          "key": "model=",
+          "certainty": "observed",
+          "note": "The same log after SQLite has checkpointed the write-ahead log into the main file."
+        },
         {
           "kind": "keyvalue",
           "path": ".codex/config.toml",
@@ -194,8 +324,89 @@
     },
     {
       "family": "ollama",
-      "default_provider": "meta",
+      "default_provider": "",
       "sources": []
+    },
+    {
+      "family": "zcode",
+      "default_provider": "zhipu",
+      "sources": [
+        {
+          "kind": "marker",
+          "path": ".zcode/v2/tasks-index.sqlite-wal",
+          "key": "account:",
+          "certainty": "observed",
+          "note": "ZCode keeps each task's model only in its SQLite task index, as account:<plan>/<model>. The write-ahead log holds the newest task; the main file is read when the log has been checkpointed. The latest task's model, not bound to one process."
+        },
+        {
+          "kind": "marker",
+          "path": ".zcode/v2/tasks-index.sqlite",
+          "key": "account:",
+          "certainty": "observed"
+        }
+      ]
+    },
+    {
+      "family": "unsloth",
+      "default_provider": "",
+      "sources": [
+        {
+          "kind": "argv",
+          "flag": "--model_name",
+          "certainty": "observed",
+          "note": "The flag Unsloth's own CLI takes. Its model is a Hugging Face id such as unsloth/Llama-3.2-3B-Instruct, and the provider is read from the segment after the publisher."
+        },
+        {
+          "kind": "argv",
+          "flag": "--model",
+          "certainty": "observed",
+          "note": "The spelling most training scripts built on Unsloth use."
+        }
+      ]
+    },
+    {
+      "family": "llama-cpp",
+      "default_provider": "",
+      "sources": [
+        {
+          "kind": "argv",
+          "flag": "--alias",
+          "certainty": "observed",
+          "note": "The name the server answers to. Unsloth Studio sets it to the Hugging Face id, such as unsloth/Qwen3.8-27B-GGUF."
+        },
+        {
+          "kind": "argv",
+          "flag": "--hf-repo",
+          "certainty": "observed",
+          "note": "The Hugging Face repository the server pulled. The -m flag is not read: it is a file path under the user's home, not a model name."
+        },
+        {
+          "kind": "argv",
+          "flag": "-hf",
+          "certainty": "observed",
+          "note": "Short form of --hf-repo."
+        }
+      ]
+    },
+    {
+      "family": "chatgpt-desktop",
+      "default_provider": "openai",
+      "sources": [
+        {
+          "kind": "marker",
+          "path": ".codex/logs_*.sqlite-wal",
+          "key": "model=",
+          "certainty": "observed",
+          "note": "Codex logs every sampling request as a tracing span with model=<name>. The newest one in the write-ahead log is the model the last turn used, which the ChatGPT app can change per chat without touching config.toml. Shared by every Codex process on the host, so it names the latest turn, not a given process's."
+        },
+        {
+          "kind": "marker",
+          "path": ".codex/logs_*.sqlite",
+          "key": "model=",
+          "certainty": "observed",
+          "note": "The same log after SQLite has checkpointed the write-ahead log into the main file."
+        }
+      ]
     }
   ]
 }

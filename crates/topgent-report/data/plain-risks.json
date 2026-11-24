@@ -1,0 +1,181 @@
+{
+  "_note": "Short labels for the 20 risk factors. Each code belongs to one group, so an agent shows each group once. kind: 'access' (can do) or 'activity' (did). level: 'act' (Critical), 'watch' (Warning), 'info' (Info).",
+  "groups": [
+    {
+      "id": "escape",
+      "kind": "activity",
+      "level": "act",
+      "headline": "Sandbox escape",
+      "why": "Ran outside its sandbox.",
+      "decision": "Stop the agent. Check files outside the project.",
+      "codes": [
+        "SANDBOX_ESCAPE"
+      ]
+    },
+    {
+      "id": "tampering",
+      "kind": "activity",
+      "level": "act",
+      "headline": "Config tampering",
+      "why": "Changed its own security settings.",
+      "decision": "Stop the agent. Restore its config.",
+      "codes": [
+        "SELF_TAMPERING"
+      ]
+    },
+    {
+      "id": "secrets_read",
+      "kind": "activity",
+      "level": "act",
+      "headline": "Credential access",
+      "why": "Read a file with keys, tokens or passwords.",
+      "decision": "Stop the agent if not expected. Rotate the credentials.",
+      "codes": [
+        "CREDENTIAL_ACCESS"
+      ]
+    },
+    {
+      "id": "persistence",
+      "kind": "activity",
+      "level": "act",
+      "headline": "Persistence",
+      "why": "Added itself to startup.",
+      "decision": "Stop the agent. Remove the startup entry.",
+      "codes": [
+        "PERSISTENCE_WRITE"
+      ]
+    },
+    {
+      "id": "scanning",
+      "kind": "activity",
+      "level": "act",
+      "headline": "Network scanning",
+      "why": "Scanned hosts or ports on the network.",
+      "decision": "Stop the agent if the scan was not requested.",
+      "codes": [
+        "RECON_FANOUT",
+        "OFFENSIVE_TOOL"
+      ]
+    },
+    {
+      "id": "cloud_keys",
+      "kind": "activity",
+      "level": "act",
+      "headline": "Cloud metadata access",
+      "why": "Queried the cloud metadata service for credentials.",
+      "decision": "Stop the agent. Review the instance role.",
+      "codes": [
+        "METADATA_SERVICE"
+      ]
+    },
+    {
+      "id": "bad_destination",
+      "kind": "activity",
+      "level": "act",
+      "headline": "Suspicious connection",
+      "why": "Connected to an unexpected or private address.",
+      "decision": "Check the destination. Block it if unknown.",
+      "codes": [
+        "SUSPICIOUS_ENDPOINT",
+        "PRIVATE_PEER"
+      ]
+    },
+    {
+      "id": "runaway",
+      "kind": "activity",
+      "level": "watch",
+      "headline": "Process spike",
+      "why": "Started many processes in a short time.",
+      "decision": "Check the process tree.",
+      "codes": [
+        "PROCESS_EXPLOSION"
+      ]
+    },
+    {
+      "id": "open_door",
+      "kind": "activity",
+      "level": "watch",
+      "headline": "Open port",
+      "why": "Listens for connections from the network.",
+      "decision": "Close the port if not required.",
+      "codes": [
+        "EXPOSED_LISTENER"
+      ]
+    },
+    {
+      "id": "not_approved",
+      "kind": "access",
+      "level": "act",
+      "headline": "Unapproved agent",
+      "why": "Blocked by policy on this host.",
+      "decision": "Stop the agent or update the policy.",
+      "codes": [
+        "DISALLOWED_ASSET"
+      ]
+    },
+    {
+      "id": "watchlist",
+      "kind": "access",
+      "level": "act",
+      "headline": "Watchlist match",
+      "why": "Can reach or touched a watched path.",
+      "decision": "Check the access.",
+      "codes": [
+        "WATCHLIST"
+      ]
+    },
+    {
+      "id": "can_leak",
+      "kind": "access",
+      "level": "watch",
+      "headline": "Credential exposure",
+      "why": "Can read credentials and has network access.",
+      "decision": "Restrict access to credential files.",
+      "codes": [
+        "SECRET_REACHABLE",
+        "EXFILTRATION_PATH"
+      ]
+    },
+    {
+      "id": "full_control",
+      "kind": "access",
+      "level": "info",
+      "headline": "Full system access",
+      "why": "Can run commands and write outside the project.",
+      "decision": "Expected for coding agents. Restrict if untrusted.",
+      "codes": [
+        "ARBITRARY_EXECUTION",
+        "BROAD_WRITE",
+        "UNRESTRICTED_NETWORK"
+      ]
+    },
+    {
+      "id": "agent_chain",
+      "kind": "access",
+      "level": "info",
+      "headline": "Starts other agents",
+      "why": "Child agents inherit its access.",
+      "decision": "Expected if it delegates work.",
+      "codes": [
+        "AGENT_CHAIN"
+      ]
+    },
+    {
+      "id": "drift",
+      "kind": "access",
+      "level": "watch",
+      "headline": "Config drift",
+      "why": "Uses access its config does not declare.",
+      "decision": "Update the config or stop the agent.",
+      "codes": [
+        "DECLARATION_DRIFT"
+      ]
+    }
+  ],
+  "levels": {
+    "act": "Critical",
+    "watch": "Warning",
+    "info": "Info",
+    "none": "OK"
+  }
+}

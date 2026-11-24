@@ -5,13 +5,14 @@
 
 import { app } from "../app-hooks.mjs";
 import { $, el } from "../dom.mjs";
-import { session, toast, view } from "../state.mjs";
+import { session, toast, view, findAgent } from "../state.mjs";
 import { changeSort, makeTable, sortedBy } from "../table.mjs";
+import { openInspector } from "../inspector.mjs";
 import { invoke } from "../transport.mjs";
 
 export function renderAssets() {
   const host = $("assets");
-  const selectedAgent = session.data.agents.find(agent => agent.pid === session.selected);
+  const selectedAgent = findAgent(session.selected);
   const relationships = (session.data.relationships ?? []).filter(link => !selectedAgent || link.agent_pid === selectedAgent.pid);
   const relationshipByTarget = new Map(relationships.map(link => [link.to, link]));
   if (selectedAgent) relationshipByTarget.set(selectedAgent.asset_id, {
@@ -40,6 +41,8 @@ export function renderAssets() {
     for (const value of ["unreviewed","approved","restricted","disallowed"]) state.append(el("option", { value, textContent:value[0].toUpperCase()+value.slice(1) }));
     state.value = effective;
     state.dataset.state = effective;
+    state.onclick = e => e.stopPropagation();
+    state.onmousedown = e => e.stopPropagation();
     state.onchange = async () => {
       state.disabled = true;
       const result = await invoke("set_asset_disposition", {
@@ -51,13 +54,27 @@ export function renderAssets() {
       state.blur();
       await app.poll(true);
     };
-    return el("tr", {}, [
+    const relationship = (link?.kind ?? (asset.kind === "agent" ? "discovered" : "—")).replaceAll("_", " ");
+    const sev = { disallowed:"crit", restricted:"high", unreviewed:"med", approved:"low" }[effective] ?? "";
+    const tr = el("tr", { className:"clickable" }, [
       el("td", {}, [el("div", { textContent:asset.name, style:"font-weight:500" }), el("div", { className:"mono faint", textContent:asset.id })]),
       el("td", { textContent:asset.kind }),
-      el("td", { className:"muted", textContent:(link?.kind ?? (asset.kind === "agent" ? "discovered" : "—")).replaceAll("_", " ") }),
+      el("td", { className:"muted", textContent:relationship }),
       el("td", { className:"muted", textContent:asset.confidence }),
       el("td", {}, state),
     ]);
+    tr.onclick = () => openInspector({
+      title: asset.name, sevLabel: effective, sevClass: sev,
+      plain: `${asset.kind}${asset.source ? ` · ${asset.source}` : ""}.`,
+      rows: [
+        ["id", asset.id, true],
+        ["type", asset.kind],
+        ["relationship", relationship],
+        ["evidence", asset.confidence],
+        ["policy state", effective],
+      ],
+    });
+    return tr;
   });
   host.replaceChildren(makeTable("assets", [
     {key:"name",label:"Asset",sortable:true}, {key:"kind",label:"Type",sortable:true},

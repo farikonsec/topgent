@@ -19,21 +19,26 @@
 
 pub mod agents;
 pub mod alarm;
+pub mod brand;
 mod capture;
 pub mod clock;
 pub mod compact;
 pub mod divider;
 pub mod glyph;
-pub mod ownership;
+pub mod incidents;
+pub mod overview;
 pub mod panels;
 pub mod report;
+pub mod session;
 pub mod settings;
+pub mod shell;
 pub mod table;
 pub mod theme;
 
-use theme::{Region, space};
+use shell::Workspace;
+use theme::{Region, Style, space};
 
-use iced::widget::{column, container, pane_grid, row, stack};
+use iced::widget::{column, container, row, stack, text};
 use iced::{Element, Length, Subscription, Task};
 
 /// Hand a link to whatever the reader uses for links.
@@ -54,7 +59,7 @@ fn open(url: &str) {
     };
     // Only the two links this interface owns. A URL from anywhere else is not
     // handed to the shell, whatever a report may contain.
-    if url == agents::REPOSITORY || url == agents::AUTHOR {
+    if url == shell::REPOSITORY || url == shell::AUTHOR {
         let _ = command.arg(url).spawn();
     }
 }
@@ -91,9 +96,21 @@ fn reveal(path: &str) {
 ///
 /// Always on top only while small. A full window pinned over everything else
 /// is a window someone closes.
-fn shape(compact: bool, restore: iced::Size) -> Task<Message> {
+fn shape(
+    compact: bool,
+    restore: iced::Size,
+    confirming_stop: bool,
+    compact_size: iced::Size,
+) -> Task<Message> {
     let (size, level) = if compact {
-        (compact::SIZE, iced::window::Level::AlwaysOnTop)
+        (
+            if confirming_stop {
+                compact::CONFIRM_SIZE
+            } else {
+                compact_size
+            },
+            iced::window::Level::AlwaysOnTop,
+        )
     } else {
         (restore, iced::window::Level::Normal)
     };
@@ -113,8 +130,8 @@ fn shape(compact: bool, restore: iced::Size) -> Task<Message> {
 // no monitor size to clamp against, so the default is chosen rather than
 // computed.
 const WINDOW: iced::Size = iced::Size {
-    width: 1240.0,
-    height: 720.0,
+    width: 1360.0,
+    height: 840.0,
 };
 
 /// Which overlay, if any, is in front of the window.
@@ -125,10 +142,11 @@ const WINDOW: iced::Size = iced::Size {
 enum Overlay {
     /// Nothing is in front of the window.
     None,
-    /// The settings panel.
-    Settings,
     /// The deeper-visibility dialog.
     Capture,
+    /// The question asked when the window is closed: save this session?
+    /// `saving` while the save it asked for is under way.
+    Closing { saving: bool },
 }
 
 /// Everything the window draws from.
@@ -141,8 +159,21 @@ pub struct App {
     sweeping: bool,
     /// What went wrong, if the last sweep failed.
     error: Option<String>,
-    /// Which detail panel is showing.
-    panel: panels::Panel,
+    /// Which host-level workspace is showing.
+    workspace: Workspace,
+    /// Which evidence about the selected agent is showing.
+    tab: agents::Tab,
+    /// The program whose runs are open on the overview.
+    program: Option<String>,
+    /// Incidents whose evidence is open, by id. Held here so a sweep that
+    /// redraws the page does not close what someone is reading.
+    evidence_open: std::collections::BTreeSet<String>,
+    /// What the agent list is filtered to.
+    filter: String,
+    /// Which agents the list is showing.
+    scope: agents::Scope,
+    /// Whether the selected agent's full record is open.
+    inspecting: bool,
     /// How this looks, as the reader chose it.
     settings: settings::Settings,
     /// Which overlay is in front of the window, if any.
@@ -152,16 +183,18 @@ pub struct App {
     /// the draw code deciding which won, which is a rule that lived in one place
     /// and had to be remembered in every other.
     overlay: Overlay,
-    /// Where the divider between the agent table and the detail panel sits.
-    ///
-    /// Held rather than fixed, because how much of the window each deserves
-    /// depends on how many agents are running, and only the reader knows.
-    split: pane_grid::State<Pane>,
+    /// The interval to go back to when a pause is lifted, so pausing and
+    /// resuming returns the cadence the reader chose rather than a default
+    /// they did not.
+    resume_ms: u64,
     /// Whether the window is the small always-on-top one.
     compact: bool,
     /// The size the large window had, so leaving compact mode restores it
     /// rather than guessing.
     restore: iced::Size,
+    /// Current full-window size, used to keep the evidence readable when the
+    /// operator resizes the window or opens it on a smaller display.
+    window_size: iced::Size,
     /// How each table is sorted and searched, so a panel stays where the
     /// reader left it when the next sweep replaces the data underneath.
     tables: std::collections::HashMap<table::Id, table::State>,
@@ -181,30 +214,12 @@ pub struct App {
     /// The most recent operator-facing outcome. It occupies a fixed footer
     /// slot and is cleared when the operator moves on to another action.
     status: Option<String>,
-}
-
-/// The two halves of the content area.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Pane {
-    /// Every agent found.
-    Agents,
-    /// Whichever detail panel is chosen.
-    Detail,
-}
-
-impl Pane {
-    /// The layout as it opens, and as the reset control restores it.
-    ///
-    /// Slightly more than half to the table, because the first question is
-    /// always what is running and only then why.
-    fn layout() -> pane_grid::State<Self> {
-        let (mut state, first) = pane_grid::State::new(Self::Agents);
-        let split = state.split(pane_grid::Axis::Horizontal, first, Self::Detail);
-        if let Some((_, split)) = split {
-            state.resize(split, 0.55);
-        }
-        state
-    }
+    /// A saved session showing instead of the live host; sweeps are stopped.
+    viewing: Option<session::Viewing>,
+    /// Saved sessions, newest first, for the settings page.
+    saved_sessions: Vec<(std::path::PathBuf, u64)>,
+    /// Why the save asked for on closing failed, shown in its dialog.
+    closing_outcome: Option<String>,
 }
 
 /// A watchlist rule being composed.
@@ -242,8 +257,27 @@ pub enum Message {
     Swept(Box<Result<report::Report, String>>),
     /// A row was chosen.
     Select(u32),
-    /// A detail panel was chosen.
-    Show(panels::Panel),
+    /// A host-level workspace was chosen.
+    Go(Workspace),
+    /// A tab of the selected agent's evidence was chosen.
+    ShowTab(agents::Tab),
+    /// An agent was opened from the overview: the advanced view, on it.
+    OpenAgent(u32),
+    /// An incident's process was asked for: the advanced view, on the agent's
+    /// Processes tab, with that process found and opened.
+    ShowProcess(u32, u32),
+    /// An incident's evidence was opened or closed, by incident id.
+    ToggleEvidence(String),
+    /// A program tile on the overview was opened, or `None` to close it.
+    PickProgram(Option<String>),
+    /// The simple view was chosen, or the advanced one.
+    SetSimple(bool),
+    /// The agent list's filter box changed.
+    FilterAgents(String),
+    /// The agent list's scope was chosen.
+    SetScope(agents::Scope),
+    /// The selected agent's full record was opened or closed.
+    ToggleInspector,
     /// A column heading was clicked. Clicking the ordering column again
     /// reverses it rather than reordering by the same key.
     SortBy(table::Id, usize),
@@ -253,14 +287,24 @@ pub enum Message {
     Drag(table::Id, usize, f32),
     /// A row was opened or closed, by its position after sorting.
     OpenRow(table::Id, usize),
-    /// The settings panel was opened or closed.
-    ToggleSettings,
+    /// The host-navigation edge moved by this many pixels.
+    ResizeSidebar(f32),
+    /// The agent-list edge moved by this many pixels.
+    ResizeAgentList(f32),
+    /// A pane drag ended; persist the settled dimensions once.
+    SavePaneLayout,
+    /// Fold or restore the host navigation.
+    ToggleSidebar,
+    /// Fold or restore the agent picker.
+    ToggleAgentList,
+    /// Return both panes to the product's usable defaults.
+    ResetPaneLayout,
+    /// The native window changed size.
+    WindowResized(iced::Size),
     /// The window should become the small one, or stop being it.
     ToggleCompact,
-    /// The divider between the table and the panel was dragged.
-    Split(pane_grid::ResizeEvent),
-    /// The divider should go back where it started.
-    ResetSplit,
+    /// Sweeping should stop where it is, or start again.
+    TogglePause,
     /// A theme was chosen.
     SetAppearance(theme::Appearance),
     /// A density was chosen.
@@ -323,6 +367,26 @@ pub enum Message {
     Reveal(String),
     /// This session should be written to a file.
     Export(bool),
+    /// The window's close button was pressed: ask whether to save.
+    CloseRequested,
+    /// Save this session, then close.
+    SaveAndClose,
+    /// Close, and let this session go.
+    CloseWithoutSaving,
+    /// Do not close after all.
+    CancelClose,
+    /// The save asked for on closing finished.
+    SavedForClose(Result<std::path::PathBuf, String>),
+    /// Save this session now, and keep going.
+    SaveNow,
+    /// A save asked for from the settings page finished.
+    SavedNow(Result<std::path::PathBuf, String>),
+    /// Open a saved session to look at.
+    OpenSaved(std::path::PathBuf),
+    /// A saved session was read. Boxed, as a report is large.
+    Opened(Result<Box<(report::Report, session::Viewing)>, String>),
+    /// Leave the saved session and show the live host again.
+    BackToLive,
     /// Something finished and there is nothing to change.
     Noop,
 }
@@ -332,14 +396,29 @@ fn clears_status(message: &Message) -> bool {
     matches!(
         message,
         Message::Select(..)
-            | Message::Show(..)
+            | Message::Go(..)
+            | Message::OpenAgent(..)
+            | Message::PickProgram(..)
+            | Message::ShowProcess(..)
+            | Message::ToggleEvidence(..)
+            | Message::SetSimple(..)
+            | Message::ShowTab(..)
+            | Message::FilterAgents(..)
+            | Message::SetScope(..)
+            | Message::ToggleInspector
             | Message::SortBy(..)
             | Message::Search(..)
             | Message::Drag(..)
             | Message::OpenRow(..)
-            | Message::ToggleSettings
+            | Message::ResizeSidebar(..)
+            | Message::ResizeAgentList(..)
+            | Message::SavePaneLayout
+            | Message::ToggleSidebar
+            | Message::ToggleAgentList
+            | Message::ResetPaneLayout
+            | Message::WindowResized(..)
             | Message::ToggleCompact
-            | Message::ResetSplit
+            | Message::TogglePause
             | Message::SetAppearance(..)
             | Message::SetDensity(..)
             | Message::SetScale(..)
@@ -365,48 +444,96 @@ fn clears_status(message: &Message) -> bool {
 
 impl App {
     fn new() -> (Self, Task<Message>) {
-        let app = Self {
+        let settings = {
+            let loaded = settings::Settings::load();
+            // Applied before the first sweep, so a capture somebody switched
+            // off last time does not run for a few seconds before the
+            // interface catches up with itself.
+            if !loaded.capture {
+                topgent_collect::capture::live::stop();
+            }
+            loaded
+        };
+        let mut app = Self {
             report: None,
             selected: None,
             sweeping: false,
             error: None,
-            panel: panels::Panel::default(),
+            // Where the last session left off. A monitor is reopened to carry
+            // on with something.
+            // The simple view always opens on the overview: it is the page
+            // that answers whether anything needs a decision.
+            workspace: if settings.simple {
+                Workspace::Overview
+            } else {
+                settings.workspace
+            },
+            tab: settings.tab,
+            program: None,
+            evidence_open: std::collections::BTreeSet::new(),
+            filter: String::new(),
+            scope: agents::Scope::default(),
+            inspecting: false,
             tables: std::collections::HashMap::new(),
             swept_at: None,
             draft: Draft::default(),
             raised: std::collections::HashMap::new(),
-            settings: {
-                let loaded = settings::Settings::load();
-                // Applied before the first sweep, so a capture somebody
-                // switched off last time does not run for a few seconds
-                // before the interface catches up with itself.
-                if !loaded.capture {
-                    topgent_collect::capture::live::stop();
-                }
-                loaded
-            },
+            settings,
             overlay: Overlay::None,
-            split: Pane::layout(),
+            resume_ms: 5_000,
             compact: false,
             restore: WINDOW,
+            window_size: WINDOW,
             stopping: None,
             events_notice: None,
             capture_outcome: None,
             status: None,
+            viewing: None,
+            // Listed when the settings page opens, not here. The folder is
+            // under Documents, and on macOS a first read of Documents waits on
+            // a privacy prompt: listed at start, the window did not appear
+            // until that prompt was answered, and it can sit behind others.
+            saved_sessions: Vec::new(),
+            closing_outcome: None,
         };
+        if app.workspace == Workspace::Settings {
+            app.saved_sessions = session::saved();
+        }
         // The window's shape follows the state rather than only the toggle, so
         // starting compact starts small. A mode that only takes effect when
         // something is pressed is a mode that is wrong the first time it is
         // seen.
-        let shaping = shape(app.compact, app.restore);
+        let shaping = shape(
+            app.compact,
+            app.restore,
+            false,
+            compact::size_for(0, app.settings.scale),
+        );
         (app, Task::batch([Task::done(Message::Sweep), shaping]))
     }
 
     fn title(&self) -> String {
+        let label = option_env!("TOPGENT_BUILD_LABEL").unwrap_or("");
+        let name = if label.is_empty() {
+            "Topgent".to_owned()
+        } else {
+            format!("Topgent {label}")
+        };
         match &self.report {
-            Some(r) => format!("Topgent {} — {} agents", r.version, r.agents.len()),
-            None => "Topgent".to_owned(),
+            Some(r) => format!("{name} {} — {} agents", r.version, r.agents.len()),
+            None => name,
         }
+    }
+
+    fn compact_size(&self) -> iced::Size {
+        compact::size_for(
+            self.report.as_ref().map_or(0, |r| r.agents.len()),
+            self.settings.scale,
+        )
+    }
+
+    fn shape_compact(&self, confirming_stop: bool) -> Task<Message> {
+        shape(true, self.restore, confirming_stop, self.compact_size())
     }
 
     // One arm per message, in the order the enum declares them. Splitting it
@@ -426,16 +553,28 @@ impl App {
             // A sweep is never joined by a second one. The guard is here rather
             // than in a timer because the timer cannot know a sweep is still
             // running, and on a slow host the subprocesses accumulate.
-            Message::Sweep if self.sweeping => Task::none(),
+            // A saved session on screen is not replaced by the live host.
+            Message::Sweep if self.sweeping || self.viewing.is_some() => Task::none(),
             Message::Sweep => {
                 self.sweeping = true;
                 Task::perform(report::sweep(), |r| Message::Swept(Box::new(r)))
             }
+            // A sweep started before a saved session was opened.
+            Message::Swept(_) if self.viewing.is_some() => {
+                self.sweeping = false;
+                Task::none()
+            }
             Message::Swept(result) => {
                 self.sweeping = false;
+                let previous_count = self.report.as_ref().map_or(0, |r| r.agents.len());
                 match *result {
                     Ok(report) => {
-                        if !report.agents.iter().any(|a| Some(a.pid) == self.selected) {
+                        // An ended agent stays selectable: it is still in
+                        // the session, and was the thing being looked at.
+                        if self
+                            .selected
+                            .is_none_or(|pid| report.find_agent(pid).is_none())
+                        {
                             self.selected = report.worst().map(|a| a.pid);
                         }
                         self.swept_at = Some(report.generated_at);
@@ -445,43 +584,157 @@ impl App {
                     }
                     Err(why) => self.error = Some(why),
                 }
-                Task::none()
+                let count = self.report.as_ref().map_or(0, |r| r.agents.len());
+                if self.compact && self.stopping.is_none() && count != previous_count {
+                    self.shape_compact(false)
+                } else {
+                    Task::none()
+                }
             }
             Message::Select(pid) => {
                 self.selected = Some(pid);
                 Task::none()
             }
-            Message::Show(panel) => {
-                self.panel = panel;
+            Message::Go(workspace) => {
+                self.workspace = workspace;
+                if workspace == Workspace::Settings {
+                    self.saved_sessions = session::saved();
+                }
+                // A page the simple view does not list is a technical page, so
+                // going to one is going to the advanced view.
+                let simple = self.settings.simple && Workspace::SIMPLE.contains(&workspace);
+                self.settle(|c| {
+                    c.workspace = workspace;
+                    c.simple = simple;
+                })
+            }
+            Message::OpenAgent(pid) => {
+                self.selected = Some(pid);
+                self.workspace = Workspace::Agents;
+                self.tab = agents::Tab::Overview;
+                self.settle(|c| {
+                    c.workspace = Workspace::Agents;
+                    c.tab = agents::Tab::Overview;
+                    c.simple = false;
+                })
+            }
+            Message::ShowProcess(agent, pid) => {
+                self.selected = Some(agent);
+                self.workspace = Workspace::Agents;
+                self.tab = agents::Tab::Processes;
+                // Found by filtering the table to its pid, in tree order, with
+                // its record open. The filter box shows why the table is short.
+                let state = self.tables.entry(table::Id::Processes).or_default();
+                state.search = pid.to_string();
+                state.sort = None;
+                state.opened = std::iter::once(0).collect();
+                self.settle(|c| {
+                    c.workspace = Workspace::Agents;
+                    c.tab = agents::Tab::Processes;
+                    c.simple = false;
+                })
+            }
+            Message::ToggleEvidence(id) => {
+                if !self.evidence_open.remove(&id) {
+                    self.evidence_open.insert(id);
+                }
                 Task::none()
             }
-            Message::ToggleSettings => {
-                self.overlay = if matches!(self.overlay, Overlay::Settings) {
-                    Overlay::None
+            Message::PickProgram(name) => {
+                self.program = name;
+                Task::none()
+            }
+            Message::SetSimple(simple) => {
+                if simple {
+                    self.workspace = Workspace::Overview;
+                }
+                let workspace = self.workspace;
+                self.settle(|c| {
+                    c.simple = simple;
+                    c.workspace = workspace;
+                })
+            }
+            Message::ShowTab(tab) => {
+                // Choosing evidence about an agent is also choosing the agent
+                // workspace. A tab that only took effect once the sidebar was
+                // put back would be a control that silently did nothing.
+                self.workspace = Workspace::Agents;
+                self.tab = tab;
+                self.settle(|c| {
+                    c.workspace = Workspace::Agents;
+                    c.tab = tab;
+                })
+            }
+            Message::FilterAgents(needle) => {
+                self.filter = needle;
+                Task::none()
+            }
+            Message::SetScope(scope) => {
+                self.scope = scope;
+                Task::none()
+            }
+            Message::ToggleInspector => {
+                self.inspecting = !self.inspecting;
+                Task::none()
+            }
+            // Held rather than forgotten: a reader who pauses to read a long
+            // record expects the cadence they chose when they start again, not
+            // the one the product ships with.
+            Message::TogglePause => {
+                let current = self.settings.refresh_ms;
+                if current == 0 {
+                    let resume = self.resume_ms;
+                    self.settle(|c| c.refresh_ms = resume)
                 } else {
-                    Overlay::Settings
-                };
-                Task::none()
-            }
-            Message::Split(pane_grid::ResizeEvent { split, ratio }) => {
-                // Clamped, because a divider dragged to the edge leaves one
-                // half with no height and no edge left to drag back.
-                self.split.resize(split, ratio.clamp(0.15, 0.85));
-                Task::none()
-            }
-            Message::ResetSplit => {
-                self.split = Pane::layout();
-                Task::none()
+                    self.resume_ms = current;
+                    self.settle(|c| c.refresh_ms = 0)
+                }
             }
             Message::ToggleCompact => {
                 self.compact = !self.compact;
                 self.overlay = Overlay::None;
-                shape(self.compact, self.restore)
+                shape(self.compact, self.restore, false, self.compact_size())
             }
             Message::SortBy(..)
             | Message::Search(..)
             | Message::Drag(..)
             | Message::OpenRow(..) => self.arrange(message),
+            Message::ResizeSidebar(delta) => {
+                self.settings.sidebar_width = (self.settings.sidebar_width + delta)
+                    .clamp(settings::SIDEBAR_WIDTH.0, settings::SIDEBAR_WIDTH.1);
+                Task::none()
+            }
+            Message::ResizeAgentList(delta) => {
+                self.settings.agent_list_width = (self.settings.agent_list_width + delta)
+                    .clamp(settings::AGENT_LIST_WIDTH.0, settings::AGENT_LIST_WIDTH.1);
+                Task::none()
+            }
+            Message::SavePaneLayout => {
+                self.settings.save();
+                Task::none()
+            }
+            Message::ToggleSidebar => self.settle(|c| {
+                c.sidebar_state = c.sidebar_state.toggled();
+            }),
+            Message::ToggleAgentList => self.settle(|c| {
+                c.agent_list_state = c.agent_list_state.toggled();
+            }),
+            Message::ResetPaneLayout => {
+                let defaults = settings::Settings::default();
+                self.settle(|c| {
+                    c.sidebar_width = defaults.sidebar_width;
+                    c.agent_list_width = defaults.agent_list_width;
+                    c.sidebar_state = settings::PaneState::Expanded;
+                    c.agent_list_state = settings::PaneState::Expanded;
+                })
+            }
+            Message::WindowResized(size) => {
+                if !self.compact {
+                    self.window_size = size;
+                    self.restore = size;
+                }
+                Task::none()
+            }
             Message::SetAppearance(appearance) => self.settle(|c| c.appearance = appearance),
             Message::SetDensity(density) => self.settle(|c| c.density = density),
             Message::SetScale(scale) => self.settle(|c| c.scale = scale),
@@ -489,7 +742,11 @@ impl App {
             Message::SetSound(on) => self.settle(|c| c.sound = on),
             Message::AskStop(pid) => {
                 self.stopping = Some(pid);
-                Task::none()
+                if self.compact {
+                    self.shape_compact(true)
+                } else {
+                    Task::none()
+                }
             }
             // Off the drawing thread, like every other action that touches
             // the disk. A rename is quick; a window that freezes while it
@@ -568,7 +825,11 @@ impl App {
             }
             Message::CancelStop => {
                 self.stopping = None;
-                Task::none()
+                if self.compact {
+                    self.shape_compact(false)
+                } else {
+                    Task::none()
+                }
             }
             // The signal itself happens off the drawing thread. It takes a
             // process snapshot and can block, and a window that freezes while
@@ -576,7 +837,12 @@ impl App {
             // during it.
             Message::ConfirmStop(pid) => {
                 self.stopping = None;
-                Task::perform(report::stop(pid), Message::Stopped)
+                let stopping = Task::perform(report::stop(pid), Message::Stopped);
+                if self.compact {
+                    Task::batch([self.shape_compact(false), stopping])
+                } else {
+                    stopping
+                }
             }
             Message::Stopped(outcome) | Message::RuleChanged(outcome) => {
                 self.status = Some(outcome);
@@ -598,94 +864,173 @@ impl App {
                 self.status = Some("writing this session to a file...".to_owned());
                 Task::perform(report::export_session(redacted), Message::RuleChanged)
             }
+            Message::CloseRequested
+            | Message::SaveAndClose
+            | Message::CloseWithoutSaving
+            | Message::CancelClose
+            | Message::SavedForClose(_)
+            | Message::SaveNow
+            | Message::SavedNow(_)
+            | Message::OpenSaved(_)
+            | Message::Opened(_)
+            | Message::BackToLive => self.session(message),
             Message::Noop => Task::none(),
+        }
+    }
+
+    /// Saving, discarding and opening sessions.
+    fn session(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::CloseRequested => {
+                self.overlay = Overlay::Closing { saving: false };
+                self.closing_outcome = None;
+                Task::none()
+            }
+            Message::CancelClose => {
+                self.overlay = Overlay::None;
+                Task::none()
+            }
+            Message::SaveAndClose => {
+                self.overlay = Overlay::Closing { saving: true };
+                self.closing_outcome = None;
+                Task::perform(session::save(), Message::SavedForClose)
+            }
+            Message::SavedForClose(Ok(_)) | Message::CloseWithoutSaving => {
+                session::discard();
+                iced::exit()
+            }
+            Message::SavedForClose(Err(why)) => {
+                // Not closed: a session that failed to save is not let go.
+                self.overlay = Overlay::Closing { saving: false };
+                self.closing_outcome = Some(why);
+                Task::none()
+            }
+            Message::SaveNow => {
+                self.status = Some("saving this session...".to_owned());
+                Task::perform(session::save(), Message::SavedNow)
+            }
+            Message::SavedNow(result) => {
+                self.saved_sessions = session::saved();
+                self.status = Some(match result {
+                    Ok(path) => format!("session saved to {}", path.display()),
+                    Err(why) => why,
+                });
+                Task::none()
+            }
+            Message::OpenSaved(path) => {
+                self.status = Some(format!("opening {}...", path.display()));
+                Task::perform(session::open(path), |r| Message::Opened(r.map(Box::new)))
+            }
+            Message::Opened(Ok(opened)) => {
+                let (report, viewing) = *opened;
+                self.selected = report.worst().map(|a| a.pid);
+                self.swept_at = Some(report.generated_at);
+                self.report = Some(report);
+                self.error = None;
+                self.status = Some(format!("showing saved session {}", viewing.name));
+                self.viewing = Some(viewing);
+                Task::none()
+            }
+            Message::Opened(Err(why)) => {
+                self.status = Some(why);
+                Task::none()
+            }
+            Message::BackToLive => {
+                self.viewing = None;
+                self.report = None;
+                self.status = None;
+                Task::done(Message::Sweep)
+            }
+            _ => Task::none(),
         }
     }
 
     fn view(&self) -> Element<'_, Message> {
         let s = self.settings.style();
         if self.compact {
-            return compact::view(self.report.as_ref(), self.sweeping, s);
+            let base = compact::view(
+                self.report.as_ref(),
+                self.sweeping,
+                self.status.as_deref(),
+                s,
+            );
+            if let Some(pid) = self.stopping {
+                let agent = self
+                    .report
+                    .as_ref()
+                    .and_then(|report| report.find_agent(pid));
+                return stack![base, agents::confirm_stop(pid, agent, s)].into();
+            }
+            if let Overlay::Closing { saving } = self.overlay {
+                return stack![
+                    base,
+                    session::closing_dialog(saving, self.closing_outcome.as_deref(), s)
+                ]
+                .into();
+            }
+            return base;
         }
         let agent = self
             .selected
-            .and_then(|pid| self.report.as_ref()?.agents.iter().find(|a| a.pid == pid));
+            .and_then(|pid| self.report.as_ref()?.find_agent(pid));
 
-        let body: Element<'_, Message> = match (&self.report, &self.error) {
+        let content: Element<'_, Message> = match (&self.report, &self.error) {
             (_, Some(why)) => theme::notice(why.clone(), s.palette),
-            (None, None) => theme::notice("Looking at this machine for the first time.", s.palette),
-            // The table takes the height its rows need, up to half the window,
-            // and the panel takes the rest. A fixed split left a short table
-            // with a hole under it and would have squeezed a long one.
-            (Some(report), None) => {
-                let selected = self.selected;
-                let panel = self.panel;
-                let tables = &self.tables;
-                let draft = &self.draft;
-                let grid = pane_grid(&self.split, move |_, pane, _| {
-                    let content: Element<'_, Message> = match pane {
-                        Pane::Agents => agents::table(report, selected, tables, s),
-                        Pane::Detail => {
-                            let selected_agent = selected
-                                .and_then(|pid| report.agents.iter().find(|a| a.pid == pid));
-                            let evidence = container(column![
-                                panels::heading(
-                                    panel,
-                                    selected_agent,
-                                    self.events_notice.as_deref(),
-                                    s
-                                ),
-                                panels::view(panel, report, selected, tables, draft, s),
-                            ])
-                            .style(theme::region(Region::Panel, s.palette))
-                            .height(Length::Fill)
-                            .width(Length::Fill);
-                            // Navigation controls the active evidence view, so
-                            // it belongs beside that view—not beside the agent
-                            // table and not in a permanent full-height gutter.
-                            row![panels::sidebar(panel, Some(report), s), evidence]
-                                .spacing(s.pad(space::BASE))
-                                .align_y(iced::Alignment::Start)
-                                .into()
-                        }
-                    };
-                    pane_grid::Content::new(content)
-                })
-                .spacing(s.pad(space::SNUG))
-                // The divider is draggable, with leeway so it can be caught
-                // without hitting one pixel exactly.
-                .on_resize(8, Message::Split);
-
-                grid.into()
-            }
+            (None, None) => theme::notice("Scanning\u{2026}", s.palette),
+            (Some(report), None) => self.workspace_view(report, agent, s),
         };
 
-        let mut window = column![agents::header(
+        let mut frame = column![shell::titlebar(self.report.as_ref(), s)];
+        if let Some(viewing) = &self.viewing {
+            frame = frame.push(session::banner(viewing, s));
+        }
+        // The simple view leaves sensor limits to the advanced one.
+        if let Some(line) =
+            shell::unavailable(self.report.as_ref(), s).filter(|_| !self.settings.simple)
+        {
+            frame = frame.push(line);
+        }
+        let pane_layout = pane_layout(self.settings, self.window_size.width, self.workspace);
+        let mut workspace = iced::widget::Row::new().height(Length::Fill);
+        if pane_layout.sidebar.is_visible() {
+            workspace = workspace.push(shell::sidebar(
+                self.workspace,
+                self.report.as_ref(),
+                self.settings.sidebar_width,
+                self.settings.simple,
+                s,
+            ));
+        }
+        workspace = workspace
+            .push(pane_edge(
+                !pane_layout.sidebar.is_visible(),
+                (!pane_layout.sidebar.is_auto_hidden()).then_some(Message::ToggleSidebar),
+                Message::ResizeSidebar,
+                s,
+            ))
+            .push(container(content).width(Length::Fill).height(Length::Fill));
+        let mut frame = frame.push(workspace);
+        if let Some(agent) =
+            agent.filter(|_| self.report.is_some() && self.error.is_none() && !self.settings.simple)
+        {
+            frame = frame.push(agents::selected_footer(agent, self.inspecting, s));
+        }
+        let frame = frame.push(shell::statusbar(
             self.report.as_ref(),
             self.sweeping,
             self.swept_at,
-            s
-        )]
-        .spacing(s.pad(space::SNUG));
-        window = window.push(body);
-        if let Some(agent) = agent.filter(|_| self.report.is_some() && self.error.is_none()) {
-            window = window.push(agents::detail(agent, s));
-        }
-        window = window.push(agents::footer(
-            self.report.as_ref().map_or("", |r| r.version.as_str()),
+            self.settings.refresh_ms,
             self.status.as_deref(),
             s,
         ));
 
-        let base = container(window)
+        let base = container(frame)
             .style(theme::region(Region::Window, s.palette))
-            .padding([s.pad(space::SNUG), s.pad(space::BASE)])
             .width(Length::Fill)
             .height(Length::Fill);
 
-        // Both overlays are drawn over the interface rather than replacing it,
-        // so the reader can still see what they were looking at when they
-        // asked for the dialog.
+        // A dialog is drawn over the interface rather than replacing it, so the
+        // reader can still see what they were looking at when they asked for it.
         let mut layers = stack![base];
         if let Some(pid) = self.stopping {
             layers = layers.push(agents::confirm_stop(pid, agent, s));
@@ -695,10 +1040,159 @@ impl App {
                 self.capture_outcome.as_deref(),
                 s,
             ));
-        } else if matches!(self.overlay, Overlay::Settings) {
-            layers = layers.push(settings::panel(self.settings, s));
+        } else if let Overlay::Closing { saving } = self.overlay {
+            layers = layers.push(session::closing_dialog(
+                saving,
+                self.closing_outcome.as_deref(),
+                s,
+            ));
         }
         layers.into()
+    }
+
+    /// The page for the chosen workspace.
+    ///
+    /// Every page names itself and says what it is for. The old interface named
+    /// the current view only by which sidebar item was highlighted, so once the
+    /// eye moved into a table it had no local identity at all, and a network
+    /// table and an event table looked like the same screen.
+    fn workspace_view<'a>(
+        &'a self,
+        report: &'a report::Report,
+        agent: Option<&'a report::Agent>,
+        s: Style,
+    ) -> Element<'a, Message> {
+        let paused = self.settings.refresh_ms == 0;
+        let sweep = shell::sweep_controls(self.sweeping, paused, s);
+        let pane_layout = pane_layout(self.settings, self.window_size.width, self.workspace);
+
+        if matches!(self.workspace, Workspace::Agents) {
+            let metrics = if self.window_size.width < 900.0 || s.scale > 1.25 {
+                shell::metrics_compact(Some(report), s)
+            } else {
+                shell::metrics(Some(report), s)
+            };
+            return column![
+                shell::page(Workspace::Agents, sweep, s),
+                metrics,
+                agent_workspace(
+                    report,
+                    self.selected,
+                    &self.filter,
+                    self.scope,
+                    self.settings.agent_list_width,
+                    pane_layout.agent_list.is_visible(),
+                    !pane_layout.agent_list.is_visible(),
+                    (!pane_layout.agent_list.is_auto_hidden()).then_some(Message::ToggleAgentList),
+                    self.investigation(report, agent, s),
+                    s,
+                ),
+            ]
+            .height(Length::Fill)
+            .into();
+        }
+
+        if matches!(self.workspace, Workspace::Overview) {
+            return column![
+                shell::page(Workspace::Overview, sweep, s),
+                overview::page(
+                    report,
+                    self.program.as_deref(),
+                    self.window_size.width - self.settings.sidebar_width,
+                    s
+                ),
+                iced::widget::space().height(Length::Fixed(s.pad(space::BASE))),
+            ]
+            .height(Length::Fill)
+            .into();
+        }
+
+        // The event log is the only page with a record of its own to set
+        // aside, so it is the only one whose heading carries a control.
+        let trailing: Element<'a, Message> = if matches!(self.workspace, Workspace::Events) {
+            row![
+                text(self.events_notice.clone().unwrap_or_default())
+                    .size(s.type_size(theme::size::MICRO))
+                    .color(s.palette.faint),
+                panels::clear_button(s),
+                sweep,
+            ]
+            .spacing(s.pad(space::BASE))
+            .align_y(iced::Alignment::Center)
+            .into()
+        } else {
+            sweep
+        };
+
+        let body: Element<'a, Message> = match self.workspace.panel() {
+            Some(panel) => panels::view(panel, report, None, &self.tables, &self.draft, s),
+            None if matches!(self.workspace, Workspace::Incidents) => {
+                incidents::page(report, &self.evidence_open, s)
+            }
+            None => settings::page(self.settings, &self.saved_sessions, s),
+        };
+
+        column![
+            shell::page(self.workspace, trailing, s),
+            container(body)
+                .padding([0.0, s.pad(space::LOOSE)])
+                .width(Length::Fill)
+                .height(Length::Fill),
+            iced::widget::space().height(Length::Fixed(s.pad(space::BASE))),
+        ]
+        .height(Length::Fill)
+        .into()
+    }
+
+    /// One agent's identity, its tabs, and the evidence the chosen tab draws.
+    ///
+    /// Identity sits directly above the evidence it belongs to. In the old
+    /// layout it was a strip along the bottom of the window, as far from the
+    /// evidence as the arrangement allowed.
+    fn investigation<'a>(
+        &'a self,
+        report: &'a report::Report,
+        agent: Option<&'a report::Agent>,
+        s: Style,
+    ) -> Element<'a, Message> {
+        let Some(agent) = agent else {
+            return container(theme::notice("Select an agent to investigate.", s.palette))
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .into();
+        };
+
+        let evidence: Element<'a, Message> = match self.tab.panel() {
+            None => agents::overview(report, agent, s),
+            Some(panel) => container(panels::view(
+                panel,
+                report,
+                Some(agent.pid),
+                &self.tables,
+                &self.draft,
+                s,
+            ))
+            .padding([s.pad(space::WIDE), s.pad(space::LOOSE)])
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into(),
+        };
+
+        let mut body = column![agents::tabs(self.tab, s)].height(Length::Shrink);
+        // Only an outcome about this agent, and only while nothing is waiting
+        // on an answer. The core's own sentence goes here rather than the
+        // status strip, because a refusal has to be read beside the thing it
+        // refused to act on.
+        if let Some(outcome) = self
+            .status
+            .as_deref()
+            .filter(|_| self.stopping.is_none())
+            .filter(|o| o.starts_with("stop") || o.contains("refused"))
+        {
+            body = body.push(agents::footnote(outcome, s));
+        }
+
+        column![body, evidence].height(Length::Fill).into()
     }
 
     /// Turn notifications on or off.
@@ -871,7 +1365,7 @@ impl App {
             }
             self.raised.insert(agent.pid, agent.grade.clone());
             let alarm = alarm::Alarm {
-                agent: agent.label(),
+                agent: agent.named(),
                 grade: agent.grade.clone(),
                 finding: agent
                     .factors
@@ -892,11 +1386,152 @@ impl App {
     /// Sweeps stop entirely while a stop is waiting on an answer. A report
     /// arriving mid-dialog can change the row under the pid being confirmed.
     fn subscription(&self) -> Subscription<Message> {
-        if self.settings.refresh_ms == 0 || self.stopping.is_some() {
-            return Subscription::none();
+        let resize = iced::window::resize_events().map(|(_, size)| Message::WindowResized(size));
+        // Always: closing asks whether to save, whatever else is going on.
+        let closing = iced::window::close_requests().map(|_| Message::CloseRequested);
+        if self.settings.refresh_ms == 0 || self.stopping.is_some() || self.viewing.is_some() {
+            return Subscription::batch([resize, closing]);
         }
-        iced::time::every(std::time::Duration::from_millis(self.settings.refresh_ms))
-            .map(|_| Message::Sweep)
+        Subscription::batch([
+            resize,
+            closing,
+            iced::time::every(std::time::Duration::from_millis(self.settings.refresh_ms))
+                .map(|_| Message::Sweep),
+        ])
+    }
+}
+
+/// One pane boundary: a clear fold control above a full-height drag target.
+fn pane_edge<'a>(
+    collapsed: bool,
+    toggle: Option<Message>,
+    resize: fn(f32) -> Message,
+    s: Style,
+) -> Element<'a, Message> {
+    let p = s.palette;
+    let arrow = if collapsed { "›" } else { "‹" };
+    let resize_target: Element<'a, Message> = if collapsed {
+        iced::widget::space().height(Length::Fill).into()
+    } else {
+        crate::divider::Divider::new(Length::Fill, p.border, p.accent, resize)
+            .on_release(|| Message::SavePaneLayout)
+            .into()
+    };
+    iced::widget::column![
+        iced::widget::button(
+            iced::widget::text(arrow)
+                .font(theme::STRONG)
+                .size(s.type_size(theme::size::LABEL))
+                .color(p.muted),
+        )
+        .on_press_maybe(toggle)
+        .padding([s.pad(space::TIGHT), s.pad(space::TIGHT)])
+        .style(move |_, status| iced::widget::button::Style {
+            background: Some(
+                if matches!(status, iced::widget::button::Status::Hovered) {
+                    p.hover()
+                } else {
+                    p.surface
+                }
+                .into()
+            ),
+            text_color: p.muted,
+            border: iced::Border {
+                color: p.border,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..iced::widget::button::Style::default()
+        }),
+        resize_target,
+    ]
+    .width(Length::Shrink)
+    .height(Length::Fill)
+    .into()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn agent_workspace<'a>(
+    report: &'a report::Report,
+    selected: Option<u32>,
+    filter: &str,
+    scope: agents::Scope,
+    width: f32,
+    visible: bool,
+    collapsed: bool,
+    toggle: Option<Message>,
+    investigation: Element<'a, Message>,
+    s: Style,
+) -> Element<'a, Message> {
+    let mut row = iced::widget::Row::new().height(Length::Fill);
+    if visible {
+        row = row.push(agents::list(report, selected, filter, scope, width, s));
+    }
+    row.push(pane_edge(collapsed, toggle, Message::ResizeAgentList, s))
+        .push(investigation)
+        .into()
+}
+
+/// The evidence gets first claim on horizontal space. On small windows the
+/// host navigation folds before the agent picker; neither stored preference is
+/// destroyed, so widening the window restores the chosen layout.
+#[derive(Debug, Clone, Copy)]
+struct PaneLayout {
+    sidebar: PaneVisibility,
+    agent_list: PaneVisibility,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PaneVisibility {
+    Expanded,
+    Collapsed,
+    AutoHidden,
+}
+
+impl PaneVisibility {
+    const fn is_visible(self) -> bool {
+        matches!(self, Self::Expanded)
+    }
+
+    const fn is_auto_hidden(self) -> bool {
+        matches!(self, Self::AutoHidden)
+    }
+}
+
+fn pane_layout(settings: settings::Settings, width: f32, workspace: Workspace) -> PaneLayout {
+    const EVIDENCE_MIN: f32 = 520.0;
+    const BOUNDARIES: f32 = 40.0;
+    let agents = matches!(workspace, Workspace::Agents);
+    let sidebar_requested = !settings.sidebar_state.is_collapsed();
+    let list_requested = agents && !settings.agent_list_state.is_collapsed();
+    let mut sidebar_visible = sidebar_requested;
+    let mut agent_list_visible = list_requested;
+    let available = width.max(0.0) - EVIDENCE_MIN - BOUNDARIES;
+    if sidebar_visible
+        && settings.sidebar_width
+            + if agent_list_visible {
+                settings.agent_list_width
+            } else {
+                0.0
+            }
+            > available
+    {
+        sidebar_visible = false;
+    }
+    if agent_list_visible && settings.agent_list_width > available {
+        agent_list_visible = false;
+    }
+    PaneLayout {
+        sidebar: match (sidebar_requested, sidebar_visible) {
+            (_, true) => PaneVisibility::Expanded,
+            (true, false) => PaneVisibility::AutoHidden,
+            (false, false) => PaneVisibility::Collapsed,
+        },
+        agent_list: match (list_requested, agent_list_visible) {
+            (_, true) => PaneVisibility::Expanded,
+            (true, false) => PaneVisibility::AutoHidden,
+            (false, false) => PaneVisibility::Collapsed,
+        },
     }
 }
 
@@ -910,6 +1545,12 @@ impl App {
 /// Whatever the toolkit could not do: no display, no graphics adapter, or a
 /// window the platform refused to create.
 pub fn run() -> iced::Result {
+    // A new window starts with no history: its own session, removed on close
+    // unless saved. Failing to make one is said and not fatal; the window
+    // then shares the state directory, as the command line does.
+    if let Err(error) = topgent_report::begin_session() {
+        eprintln!("topgent: no session of its own, using the shared state directory: {error}");
+    }
     iced::application(App::new, App::update, App::view)
         .title(App::title)
         .subscription(App::subscription)
@@ -922,6 +1563,8 @@ pub fn run() -> iced::Result {
         .default_font(theme::TEXT)
         .window(iced::window::Settings {
             icon: icon(),
+            // Closing asks first (see `Message::CloseRequested`).
+            exit_on_close_request: false,
             ..iced::window::Settings::default()
         })
         // Six columns of table beside a detail panel do not fit in a small
@@ -940,4 +1583,36 @@ fn icon() -> Option<iced::window::Icon> {
     const SIZE: &str = include_str!(concat!(env!("OUT_DIR"), "/icon-size.txt"));
     let (width, height) = SIZE.split_once(',')?;
     iced::window::icon::from_rgba(PIXELS.to_vec(), width.parse().ok()?, height.parse().ok()?).ok()
+}
+
+#[cfg(test)]
+mod pane_layout_tests {
+    use super::*;
+
+    #[test]
+    fn narrow_windows_give_evidence_the_space_before_the_other_panes() {
+        let settings = settings::Settings::default();
+        let wide = pane_layout(settings, 1360.0, Workspace::Agents);
+        assert_eq!(wide.sidebar, PaneVisibility::Expanded);
+        assert_eq!(wide.agent_list, PaneVisibility::Expanded);
+
+        let medium = pane_layout(settings, 900.0, Workspace::Agents);
+        assert_eq!(medium.sidebar, PaneVisibility::AutoHidden);
+        assert_eq!(medium.agent_list, PaneVisibility::Expanded);
+
+        let narrow = pane_layout(settings, 650.0, Workspace::Agents);
+        assert_eq!(narrow.sidebar, PaneVisibility::AutoHidden);
+        assert_eq!(narrow.agent_list, PaneVisibility::AutoHidden);
+    }
+
+    #[test]
+    fn a_deliberately_collapsed_pane_stays_collapsed_when_widened() {
+        let settings = settings::Settings {
+            sidebar_state: settings::PaneState::Collapsed,
+            ..settings::Settings::default()
+        };
+        let layout = pane_layout(settings, 1360.0, Workspace::Agents);
+        assert_eq!(layout.sidebar, PaneVisibility::Collapsed);
+        assert_eq!(layout.agent_list, PaneVisibility::Expanded);
+    }
 }

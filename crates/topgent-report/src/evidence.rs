@@ -92,8 +92,10 @@ impl core::error::Error for ProduceError {}
 ///
 /// Ordered by severity: an unsupported collector cannot also be complete, and
 /// a collector that reported loss cannot be complete whatever else is true.
-/// Only a collector that measured its drops and found none may say
-/// `CompleteForWindow`, and only for its own interval.
+/// Completeness needs both halves: a sensor that was receiving across the
+/// whole interval, and a loss counter that covers what it receives. Only the
+/// kernel process sensor has both, and only when it ran without a gap. A
+/// sampling collector's zero says nothing about what happened between sweeps.
 #[must_use]
 pub fn coverage_for(run: &CollectorRun) -> CollectionCoverage {
     match run.state {
@@ -101,12 +103,12 @@ pub fn coverage_for(run: &CollectorRun) -> CollectionCoverage {
         CapabilityState::PermissionRequired | CapabilityState::Error => {
             CollectionCoverage::CollectorDegraded
         }
-        CapabilityState::Available => match run.dropped_events {
-            Some(0) => CollectionCoverage::CompleteForWindow,
-            Some(_) => CollectionCoverage::LossObserved,
-            // The collector does not account for drops, so nothing may be
-            // said about what happened between two sweeps.
-            None => CollectionCoverage::SnapshotOnly,
+        CapabilityState::Available => match (run.dropped_events, run.continuous) {
+            (Some(drops), _) if drops > 0 => CollectionCoverage::LossObserved,
+            // Not running for part of the interval: a gap no counter covers.
+            (_, Some(false)) => CollectionCoverage::CollectorDegraded,
+            (Some(0), Some(true)) => CollectionCoverage::CompleteForWindow,
+            _ => CollectionCoverage::SnapshotOnly,
         },
     }
 }
@@ -117,6 +119,9 @@ pub fn limitations_for(run: &CollectorRun) -> Vec<Limitation> {
     let mut out = Vec::new();
     if matches!(run.dropped_events, Some(n) if n > 0) {
         out.push(Limitation::EventsDropped);
+    }
+    if run.continuous == Some(false) {
+        out.push(Limitation::SensorGap);
     }
     // A collector's declared boundary is deliberately NOT mapped to
     // `SensorGap`. `boundary` says what a healthy run of this sensor cannot
@@ -190,6 +195,9 @@ pub fn redaction_gate(fact: &Fact) -> Result<(), ProduceError> {
             bounded("claim.extension_id", extension_id)?;
         }
         Claim::ModelInUse {
+            provider, model, ..
+        }
+        | Claim::ModelSeen {
             provider, model, ..
         } => {
             bounded("claim.provider", provider)?;
@@ -395,4 +403,58 @@ pub fn attach_claims(bundle: &mut Bundle, scored: &[(Agent, Risk)]) -> Result<us
         }
     }
     Ok(written)
+}
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::{coverage_for, limitations_for};
+    use topgent_collect::{CapabilityState, CollectorRun};
+    use topgent_evidence::{CollectionCoverage, Limitation};
+
+    fn run(dropped: Option<u64>, continuous: Option<bool>) -> CollectorRun {
+        CollectorRun {
+            collector: "process_events",
+            state: CapabilityState::Available,
+            fact_count: 0,
+            duration_ms: 1,
+            detail: None,
+            dropped_events: dropped,
+            boundary: None,
+            continuous,
+        }
+    }
+
+    /// The one sensor with real loss accounting, running across the whole
+    /// interval and counting nothing lost, may say its window is complete.
+    #[test]
+    fn a_continuous_sensor_with_zero_loss_across_the_interval_is_complete_for_it() {
+        assert_eq!(
+            coverage_for(&run(Some(0), Some(true))),
+            CollectionCoverage::CompleteForWindow
+        );
+    }
+
+    #[test]
+    fn loss_or_a_gap_or_sampling_is_never_complete() {
+        assert_eq!(
+            coverage_for(&run(Some(3), Some(true))),
+            CollectionCoverage::LossObserved
+        );
+        assert_eq!(
+            coverage_for(&run(Some(0), Some(false))),
+            CollectionCoverage::CollectorDegraded,
+            "not running for part of the interval"
+        );
+        assert!(limitations_for(&run(Some(0), Some(false))).contains(&Limitation::SensorGap));
+        assert_eq!(
+            coverage_for(&run(None, Some(true))),
+            CollectionCoverage::SnapshotOnly,
+            "no loss figure yet, so nothing to stand on"
+        );
+        assert_eq!(
+            coverage_for(&run(Some(0), None)),
+            CollectionCoverage::SnapshotOnly,
+            "a sampling collector's zero says nothing about between sweeps"
+        );
+    }
 }

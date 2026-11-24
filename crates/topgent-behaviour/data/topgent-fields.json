@@ -1,0 +1,104 @@
+{
+ "about": "The fields Topgent supplies to the behaviour rules, and where each comes from. A field not listed is unknown to every rule. Changing this file changes rule coverage: regenerate fixtures with scripts/f-fixtures.py.",
+ "fields": {
+  "evt.type": "the Audit syscall record; the process sensor for an exec",
+  "evt.num": "the Audit record serial",
+  "evt.rawres": "the Audit record's return value",
+  "evt.res": "SUCCESS, or the error name from the return value",
+  "evt.is_open_read": "the open call's flags",
+  "evt.is_open_write": "the open call's flags",
+  "evt.is_open_exec": "the open call's flags",
+  "evt.arg.flags": "the open call's flags, as O_* names",
+  "evt.arg.path": "the Audit PATH record",
+  "evt.arg.oldpath": "the Audit PATH records of a rename or link",
+  "evt.arg.newpath": "the Audit PATH records of a rename or link",
+  "evt.arg.target": "the target text of a symbolic link",
+  "evt.arg.name": "the Audit PATH record",
+  "evt.arg.filename": "the Audit PATH record of an exec",
+  "evt.arg.mode": "the chmod or mkdir call's mode argument, as S_I* names",
+  "evt.arg.request": "the ptrace call's request argument, by name",
+  "evt.arg.uid": "the setuid call's argument, named by the host's account database",
+  "evt.arg.cmd": "the bpf call's command argument, by name",
+  "evt.arg.domain": "the socket call's domain argument, as an AF_* name",
+  "fd.name": "the file a call named, from the Audit PATH record, with . and .. resolved; unknown for sockets, whose local address Audit does not record",
+  "fd.nameraw": "the file a call named, as the program passed it, placed under the working directory",
+  "fd.directory": "the directory of fd.name",
+  "fd.filename": "the last component of fd.name",
+  "fd.typechar": "f for a file, 4 or 6 for an internet socket, u for a local one",
+  "fd.type": "file, ipv4, ipv6 or unix",
+  "fd.num": "the open call's descriptor or -1 when it failed; the socket descriptor of a network call",
+  "fd.sip": "the peer address of a network call",
+  "fd.sport": "the peer port of a network call",
+  "fd.ip": "the peer address of a network call",
+  "fd.port": "the peer port of a network call",
+  "fd.net": "the peer address of a network call",
+  "fd.snet": "the peer address of a network call",
+  "fd.rnet": "the peer address of a network call",
+  "fd.cip": "the peer address of an inbound accept or datagram receive",
+  "fd.cnet": "the peer address of an inbound accept or datagram receive",
+  "fd.cip.name": "absent unless a future DNS sensor observes a client name; socket metadata itself carries only the address",
+  "fd.name_changed": "whether a datagram call supplied a peer address for that operation; false for accept, listen and connect",
+  "fd.sockfamily": "ip or unix, from the address family",
+  "fd.connected": "whether a connect call succeeded",
+  "fd.l4proto": "tcp, udp, icmp or raw, from the socket call that made the socket, which the eBPF source watches; unknown through Audit, which does not record it, and for a socket made before the probe loaded or inherited from a parent",
+  "proc.name": "the Audit record's process name; the process sensor",
+  "proc.exe": "the first exec argument, as the program was invoked, from Audit's exec arguments held in memory",
+  "proc.exepath": "the program path from the Audit record or process history",
+  "proc.pname": "process history",
+  "proc.pexe": "process history",
+  "proc.aname": "process history, one ancestor per index or all at once",
+  "proc.aexe": "process history, one ancestor per index",
+  "proc.cmdline": "the exec's Audit arguments, held in memory only",
+  "proc.args": "the exec's Audit arguments, held in memory only",
+  "proc.pcmdline": "the parent's exec arguments, when Audit saw that exec, in memory only",
+  "proc.tty": "whether the process has a controlling terminal: Audit records its terminal; the eBPF source follows task_struct.signal->tty through BTF and supplies 0 or 1",
+  "proc.cwd": "the working directory, ending in /: the Audit record's; on the eBPF source, walked in the kernel for every exec and for a call with a path relative to it, as the process sees it from its own root",
+  "proc.duration": "the event time less the process start time",
+  "proc.vpid": "the last NSpid value from /proc/<pid>/status while the process still exists: its pid in the innermost namespace; unknown after it exits",
+  "proc.is_vpgid_leader": "whether /proc/<pid>/stat reports the process id as its process-group id while the process still exists",
+  "proc.is_exe_from_memfd": "whether the program path is an anonymous memory file",
+  "user.uid": "the Audit record's user id",
+  "user.name": "the user id, named by the host's account database; in a container, by the container's own /etc/passwd when it can be read (the eBPF source)",
+  "user.loginuid": "the audit login user id, -1 when unset; the eBPF source reads it from the task when this kernel records it",
+  "container.id": "host, for a process in the host's pid namespace; the container's short id when the eBPF source named it from the event's own cgroup, else from a running process's /proc/<pid>/cgroup",
+  "container.image.repository": "absent for a host process; in a container, the image's repository as Docker states it, when Docker can be asked while the container exists (the eBPF source)",
+  "container.privileged": "absent for a host process; in a container, whether Docker runs it privileged (the eBPF source)",
+  "container.mount.dest": "absent for a host process; in a container, mount destinations from Docker inspect, matched exactly or by the catalogue's trailing wildcard (the eBPF source)",
+  "k8s.ns.name": "absent for a host process; in a container, the pod namespace the kubelet's labels give, absent for one no kubelet started (the eBPF source)",
+  "k8s.pod.name": "absent for a host process; in a container, the pod name the kubelet's labels give, absent for one no kubelet started (the eBPF source)",
+  "thread.cap_effective": "the caller's effective capability set, as CAP_* names, read from its credentials through BTF (the eBPF source); Audit does not record it",
+  "thread.cap_permitted": "the caller's permitted capability set, as CAP_* names (the eBPF source); Audit does not record it"
+ },
+ "sources": {
+  "about": "What each syscall source cannot supply, and whether it names the container an event ran in. Coverage is counted for the source actually delivering: a field one source lacks is unknown on it.",
+  "audit": {
+   "lacks": [
+    "proc.vpid",
+    "fd.l4proto",
+    "thread.cap_effective",
+    "thread.cap_permitted"
+   ]
+  },
+  "ebpf": {
+   "lacks": [],
+   "names_containers": true,
+   "lacks_in_containers": [],
+   "blind_to": {
+    "Read environment variable from /proc files": "read-only opens under /proc/ are dropped in the kernel, 97% of all opens on a measured host (docs/ebpf/PLAN.md, E4)"
+   }
+  }
+ },
+ "host_only": {
+  "about": "Fields Topgent answers the same way for every process in the host's pid namespace: container.id is host, and a host process has no container image, pod or mounts, so the rest are absent. For a process in a container they are what its runtime says, or unknown.",
+  "values": {
+   "container.id": "host"
+  },
+  "absent": [
+   "container.image.repository",
+   "container.privileged",
+   "container.mount.dest",
+   "k8s.ns.name",
+   "k8s.pod.name"
+  ]
+ }
+}

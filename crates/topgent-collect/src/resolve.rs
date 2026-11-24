@@ -45,6 +45,8 @@ const OWNERS: &[(&str, &str)] = &[
     ("openrouter.ai", "OpenRouter"),
     ("mistral.ai", "Mistral"),
     ("cohere.com", "Cohere"),
+    ("z.ai", "Z.ai"),
+    ("bigmodel.cn", "Z.ai"),
 ];
 
 fn cache() -> &'static Mutex<HashMap<String, Option<String>>> {
@@ -108,10 +110,14 @@ fn host_ptr(ip: &str) -> Option<String> {
 /// Parse `dig +short -x` output: the first non-empty line is the name.
 #[must_use]
 pub fn parse_dig_short(text: &str) -> Option<String> {
+    // `dig` prints its own errors to stdout, prefixed `;;`. An error is not
+    // a name: a timed-out resolver once named a destination
+    // ";; communications error to 192.0.2.53#53: timed out".
     text.lines()
-        .next()
-        .map(|l| l.trim().trim_end_matches('.').to_owned())
-        .filter(|s| !s.is_empty())
+        .map(str::trim)
+        .find(|l| !l.is_empty() && !l.starts_with(';'))
+        .map(|l| l.trim_end_matches('.').to_owned())
+        .filter(|s| !s.contains(char::is_whitespace))
 }
 
 /// Parse `host <ip>` output, whose line is
@@ -155,6 +161,10 @@ mod tests {
             Some("Amazon AWS")
         );
         assert_eq!(owner_of("dns.google"), Some("Google"));
+        assert_eq!(owner_of("api.z.ai"), Some("Z.ai"));
+        assert_eq!(owner_of("open.bigmodel.cn"), Some("Z.ai"));
+        // Alibaba storage is not Z.ai, even when Z.ai uploads to it.
+        assert_eq!(owner_of("zcode-release.oss-cn-hongkong.aliyuncs.com"), None);
         // Suffix, not substring: a lookalike host does not match.
         assert_eq!(owner_of("github.com.evil.example"), None);
         assert_eq!(owner_of("not-anthropic.com.attacker.net"), None);
@@ -184,6 +194,11 @@ mod tests {
     fn host_output_is_read_after_the_pointer_keyword() {
         let out = "3.121.82.140.in-addr.arpa domain name pointer lb.github.com.\n";
         assert_eq!(parse_host_output(out).as_deref(), Some("lb.github.com"));
+        assert_eq!(
+            parse_dig_short(";; communications error to 192.0.2.53#53: timed out\n"),
+            None,
+            "a resolver error is not a name"
+        );
         // No PTR record: nothing extracted, never a crash.
         assert_eq!(
             parse_host_output("Host 1.2.3.4 not found: 3(NXDOMAIN)\n"),

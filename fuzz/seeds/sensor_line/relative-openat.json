@@ -1,0 +1,1 @@
+{"e":"sys","call":"openat","pid":7,"ret":3,"args":[18446744073709551516,0,0,0],"path":"notes.txt","cwd":"/home/user/a b","seq":7,"at":1}

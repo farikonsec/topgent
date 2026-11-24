@@ -504,6 +504,7 @@ mod tests {
             uid: 501,
             user: "test".to_owned(),
             parent: None,
+            pid_namespace: None,
             family,
         };
 
@@ -552,6 +553,7 @@ mod tests {
             uid: 501,
             user: "test".to_owned(),
             parent: None,
+            pid_namespace: None,
             family: Some("codex-cli"),
         };
         let approval = journal.request_approval(42, 1_000, "watchlist:0:kill", 2_000, 500)?;

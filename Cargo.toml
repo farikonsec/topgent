@@ -1,9 +1,12 @@
 [workspace]
 resolver = "3"
-members = ["crates/topgent-facts", "crates/topgent-evidence", "crates/topgent-policy", "crates/topgent-core", "crates/topgent-collect", "crates/topgent-capture", "crates/topgent-enforce", "crates/topgent-journal", "crates/topgent-export", "crates/topgent-report", "crates/topgent-lab", "crates/topgent-verify", "crates/topgent-cli", "crates/topgent-ui"]
+members = ["crates/topgent-facts", "crates/topgent-evidence", "crates/topgent-policy", "crates/topgent-core", "crates/topgent-collect", "crates/topgent-capture", "crates/topgent-sensor", "crates/topgent-behaviour", "crates/topgent-ebpf-common", "crates/topgent-ebpf", "crates/topgent-enforce", "crates/topgent-journal", "crates/topgent-export", "crates/topgent-report", "crates/topgent-lab", "crates/topgent-verify", "crates/topgent-cli", "crates/topgent-ui"]
+# Built for the BPF target on a pinned nightly by topgent-ebpf's build
+# script, never by the workspace on stable. See docs/ebpf/PLAN.md.
+exclude = ["crates/topgent-ebpf-probe"]
 
 [workspace.package]
-version = "0.5.1"
+version = "0.6.0"
 edition = "2024"
 rust-version = "1.95"
 license = "Apache-2.0"

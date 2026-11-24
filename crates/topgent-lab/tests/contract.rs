@@ -27,7 +27,17 @@ use topgent_lab::contract::{
 /// Changing this constant is how a contract change is agreed to. Changing it
 /// to make a red test go green, without reading the diff, defeats every other
 /// guarantee in this file.
-const EXPECTED: &str = "83bfbe126022dac35d1e01e6958c69ae9147d54d5788767c5cd30f454ba2caf3";
+// `Direction::Inbound` appended in 0.6.0. The fact schema stays
+// at 4: every v4 record still decodes, and the evidence decoder refuses any
+// version but its own, so a bump would make every existing chain unreadable
+// to gain nothing. Same precedent as `Protocol::Unstated`.
+// `process_events` collector added in 0.6.0: the kernel's process
+// lifecycle feed. It is registered on every platform, unavailable off Linux,
+// so the contract does not differ by platform. No fact vocabulary changed.
+// `Claim::ModelSeen` added: the other models an agent used recently, beside
+// the `ModelInUse` it uses now. Additive like `Direction::Inbound`: every v4
+// record still decodes, so the fact schema stays at 4.
+const EXPECTED: &str = "1b44efa399b4161e6fdb7fa9186c39e37cd02f6ba813fc0c4df81e120d412e91";
 
 #[test]
 fn the_public_contract_has_not_changed_by_accident() {
@@ -249,6 +259,10 @@ fn sample_claims() -> Vec<Claim> {
         Claim::ModelInUse {
             provider: "anthropic".to_owned(),
             model: "opus".to_owned(),
+        },
+        Claim::ModelSeen {
+            provider: "openai".to_owned(),
+            model: "gpt-6-luna".to_owned(),
         },
         Claim::ConnectorDeclared {
             name: "mcp".to_owned(),

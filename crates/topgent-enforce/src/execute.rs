@@ -273,6 +273,7 @@ mod tests {
             uid,
             user: "fixture".to_owned(),
             parent,
+            pid_namespace: None,
             family: (pid == 42).then_some("codex-cli"),
         }
     }

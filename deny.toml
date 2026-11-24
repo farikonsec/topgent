@@ -36,6 +36,8 @@ ignore = [
   # here when it was not. It is accepted in osv-scanner.toml, which is the only
   # tool that raises it.
   "RUSTSEC-2026-0206", "RUSTSEC-2026-0192", "RUSTSEC-2024-0436",
+  # Unmaintained notices from iced 0.14, recorded 2026-11-24.
+  "RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372", "RUSTSEC-2026-0441",
 ]
 
 [licenses]

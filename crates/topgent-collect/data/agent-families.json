@@ -3,6 +3,29 @@
   "source": "topgent-built-in",
   "families": [
     {
+      "id": "claude-desktop",
+      "name": "Claude Desktop",
+      "kind": "agent_editor",
+      "executables": [
+        {
+          "match": "exact",
+          "value": "claude"
+        },
+        {
+          "match": "exact",
+          "value": "claude.exe"
+        }
+      ],
+      "path_markers": [
+        "/applications/claude.app/contents/macos/",
+        "/anthropicclaude/"
+      ],
+      "verified_platforms": [
+        "macos-aarch64"
+      ],
+      "last_verified_at": "2026-11-24"
+    },
+    {
       "id": "claude-code",
       "name": "Claude Code",
       "kind": "agent",
@@ -16,6 +39,14 @@
           "value": "claude.exe"
         }
       ],
+      "path_markers": [
+        "/.local/share/claude/versions/",
+        "/.claude/local/",
+        "/node_modules/@anthropic-ai/claude-code/",
+        "/caskroom/claude-code/",
+        "/application support/claude/claude-code/"
+      ],
+      "name_only": true,
       "extension_ids": [
         "anthropic.claude-code"
       ],
@@ -192,6 +223,14 @@
           "value": "ollama.exe"
         }
       ],
+      "path_markers": [
+        "/usr/local/bin/ollama",
+        "/usr/bin/ollama",
+        "/ollama.app/",
+        "/cellar/ollama/",
+        "/programs/ollama/"
+      ],
+      "name_only": true,
       "verified_platforms": [
         "windows-x86_64"
       ],
@@ -244,6 +283,74 @@
       "last_verified_at": "2026-09-02"
     },
     {
+      "id": "crush",
+      "name": "Crush",
+      "kind": "agent",
+      "executables": [
+        {
+          "match": "exact",
+          "value": "crush"
+        },
+        {
+          "match": "exact",
+          "value": "crush.exe"
+        }
+      ],
+      "path_markers": [
+        "/node_modules/@charmland/crush/",
+        "/go/bin/crush",
+        "/cellar/crush/"
+      ],
+      "name_only": true,
+      "last_verified_at": null
+    },
+    {
+      "id": "github-copilot-cli",
+      "name": "GitHub Copilot CLI",
+      "kind": "agent",
+      "executables": [
+        {
+          "match": "exact",
+          "value": "copilot"
+        },
+        {
+          "match": "exact",
+          "value": "copilot.exe"
+        },
+        {
+          "match": "exact",
+          "value": "npm-loader.js"
+        }
+      ],
+      "path_markers": [
+        "/node_modules/@github/copilot/",
+        "/caskroom/copilot-cli/"
+      ],
+      "name_only": true,
+      "last_verified_at": null
+    },
+    {
+      "id": "factory-droid",
+      "name": "Factory Droid CLI",
+      "kind": "agent",
+      "executables": [
+        {
+          "match": "exact",
+          "value": "droid"
+        },
+        {
+          "match": "exact",
+          "value": "droid.exe"
+        }
+      ],
+      "path_markers": [
+        "/node_modules/droid/",
+        "/cellar/droid/"
+      ],
+      "name_only": true,
+      "last_verified_at": null
+    },
+    {
       "id": "cursor",
       "name": "Cursor",
       "kind": "agent_editor",
@@ -274,6 +381,13 @@
           "value": "lmstudio"
         }
       ],
+      "path_markers": [
+        "/lm studio.app/",
+        "/.lmstudio/",
+        "/.mount_lm-stu",
+        "/programs/lm studio/"
+      ],
+      "name_only": true,
       "last_verified_at": null
     },
     {
@@ -286,6 +400,13 @@
           "value": "windsurf"
         }
       ],
+      "path_markers": [
+        "/windsurf.app/",
+        "/usr/share/windsurf/",
+        "/opt/windsurf/",
+        "/programs/windsurf/"
+      ],
+      "name_only": true,
       "last_verified_at": null
     },
     {
@@ -352,6 +473,108 @@
         "linux-aarch64"
       ],
       "last_verified_at": "2026-08-23"
+    },
+    {
+      "id": "zcode",
+      "name": "ZCode",
+      "kind": "agent_editor",
+      "executables": [
+        {
+          "match": "exact",
+          "value": "zcode"
+        },
+        {
+          "match": "exact",
+          "value": "zcode.exe"
+        }
+      ],
+      "path_markers": [
+        "/.mount_zcode",
+        "/opt/zcode/",
+        "/zcode.app/",
+        "/zcode preview.app/",
+        "/programs/zcode/"
+      ],
+      "verified_platforms": [
+        "linux-aarch64"
+      ],
+      "last_verified_at": "2026-10-12"
+    },
+    {
+      "id": "unsloth",
+      "name": "Unsloth",
+      "kind": "model_runtime",
+      "executables": [
+        {
+          "match": "prefix",
+          "value": "unsloth"
+        }
+      ],
+      "path_markers": [
+        "/unsloth.app/contents/macos/",
+        "/site-packages/unsloth/",
+        "/bin/unsloth"
+      ],
+      "name_only": true,
+      "last_verified_at": "2026-11-24",
+      "verified_platforms": [
+        "macos-aarch64"
+      ]
+    },
+    {
+      "id": "llama-cpp",
+      "name": "llama.cpp",
+      "kind": "model_runtime",
+      "executables": [
+        {
+          "match": "exact",
+          "value": "llama-server"
+        },
+        {
+          "match": "exact",
+          "value": "llama-server.exe"
+        },
+        {
+          "match": "exact",
+          "value": "llama-cli"
+        },
+        {
+          "match": "exact",
+          "value": "llama-cli.exe"
+        }
+      ],
+      "path_markers": [
+        "/llama.cpp/",
+        "/cellar/llama.cpp/"
+      ],
+      "name_only": true,
+      "verified_platforms": [
+        "macos-aarch64"
+      ],
+      "last_verified_at": "2026-11-24"
+    },
+    {
+      "id": "chatgpt-desktop",
+      "name": "ChatGPT",
+      "kind": "agent_editor",
+      "executables": [
+        {
+          "match": "exact",
+          "value": "chatgpt"
+        },
+        {
+          "match": "exact",
+          "value": "chatgpt.exe"
+        }
+      ],
+      "path_markers": [
+        "/applications/chatgpt.app/contents/macos/",
+        "/openai.chatgpt"
+      ],
+      "verified_platforms": [
+        "macos-aarch64"
+      ],
+      "last_verified_at": "2026-11-24"
     }
   ]
 }

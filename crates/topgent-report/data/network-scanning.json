@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "rule": "NETWORK_SCANNING",
+  "summary": "One run tried many ports on one host, or many hosts, within minutes, and sent nothing to them.",
+  "thresholds": {
+    "window_ms": 300000,
+    "ports_on_one_host": 20,
+    "hosts": 20
+  },
+  "thresholds_explained": {
+    "window_ms": "How close together the probes must start to count as one scan (5 minutes). A tool reaching twenty services over a day is not scanning.",
+    "ports_on_one_host": "Distinct ports on one address, each connected to and sent no data, that make a port scan (20). Ordinary software talks to a handful of ports on any one host.",
+    "hosts": "Distinct addresses, each connected to and sent no data, that make a host sweep (20). A package install reaches many hosts too, but it sends a request to every one, so those are not probes."
+  },
+  "probe_note": "A probe is a destination the run connected to, or tried to, and wrote no bytes to. Name lookups (port 53) and the port-0 connects a resolver makes to rank addresses are never probes. Outcome is reported, not required: a scanner using non-blocking connects sees most attempts as 'in progress', so 'mostly failing' cannot be the test.",
+  "card": {
+    "kind": "network_scanning",
+    "name": "Network Scanning",
+    "severity": "high",
+    "why": [
+      "A coding agent connects to its model service, package registries and the hosts a task names. Trying many ports or many addresses without sending anything is how a network is mapped before an attack.",
+      "It sent no data to any of them: it was checking what answers, not using a service."
+    ],
+    "actions": [
+      "Stop the program and check what task it was given.",
+      "Check the addresses it reached: an answer on an unexpected port is a service it may try next."
+    ],
+    "limits": [
+      "Topgent counts connection attempts and bytes written. It does not see packets, so a raw-socket (SYN) scan that bypasses connect is not counted.",
+      "A slow scan spread over hours, a few ports at a time, stays under the 5-minute window.",
+      "A program that legitimately checks many hosts, such as a monitoring or discovery tool, raises this too; the card names the program."
+    ]
+  }
+}

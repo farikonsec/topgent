@@ -148,12 +148,11 @@ pub fn dialog<'a>(
         State::Available => {
             body = body.push(
                 text(if running {
-                    "Reading packet headers now. Turning it off stops that at once and \
-                     needs no password."
+                    "Reading packet headers. Turning it off needs no password."
                 } else if switched_off {
-                    "Permitted on this machine and switched off. Nothing is being read."
+                    "Allowed, and off."
                 } else {
-                    "Permitted on this machine. Capture starts at the next sweep."
+                    "Allowed. Starts at the next sweep."
                 })
                 .size(s.type_size(size::BODY))
                 .color(p.muted),

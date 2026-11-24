@@ -55,7 +55,7 @@ pub fn state_dir() -> PathBuf {
         .join("topgent")
 }
 
-fn home_directory() -> Option<PathBuf> {
+pub(crate) fn home_directory() -> Option<PathBuf> {
     if let Some(home) = std::env::var_os("HOME") {
         return Some(PathBuf::from(home));
     }
@@ -77,8 +77,16 @@ fn home_directory() -> Option<PathBuf> {
 /// Where the log and the last snapshot live.
 #[derive(Debug, Clone)]
 pub struct Journal {
+    /// This session's histories and events.
     dir: PathBuf,
+    /// What stays across sessions: approvals, response cooldowns and
+    /// transitions, tool attestations. The same as `dir` for a journal
+    /// opened at one directory.
+    root: PathBuf,
 }
+
+/// Records kept across sessions, by their lock names.
+const SHARED_RECORDS: [&str; 3] = ["tool-attestations", "response-transitions", "approvals"];
 
 /// Exclusive right to rewrite one journal record file, released on drop.
 ///
@@ -163,7 +171,10 @@ impl Journal {
     /// Open the journal at the default location.
     #[must_use]
     pub fn open_default() -> Self {
-        Self::at(&state_dir())
+        Self {
+            dir: crate::session::session_dir(),
+            root: state_dir(),
+        }
     }
 
     /// Open the journal in a specific directory.
@@ -171,6 +182,7 @@ impl Journal {
     pub fn at(dir: &Path) -> Self {
         Self {
             dir: dir.to_path_buf(),
+            root: dir.to_path_buf(),
         }
     }
 
@@ -188,6 +200,10 @@ impl Journal {
         self.dir.join("network-history.json")
     }
 
+    pub(crate) fn process_history_path(&self) -> PathBuf {
+        self.dir.join("process-history.json")
+    }
+
     pub(crate) fn semantic_path(&self) -> PathBuf {
         self.dir.join("semantic-context.json")
     }
@@ -197,11 +213,11 @@ impl Journal {
     }
 
     pub(crate) fn approval_path(&self) -> PathBuf {
-        self.dir.join("approvals.json")
+        self.root.join("approvals.json")
     }
 
     pub(crate) fn response_cooldown_path(&self) -> PathBuf {
-        self.dir.join("response-cooldowns.json")
+        self.root.join("response-cooldowns.json")
     }
 
     pub(crate) fn sensor_health_path(&self) -> PathBuf {
@@ -209,7 +225,7 @@ impl Journal {
     }
 
     pub(crate) fn tool_attestation_path(&self) -> PathBuf {
-        self.dir.join("tool-attestations.json")
+        self.root.join("tool-attestations.json")
     }
 
     /// Persist one sensor-binary attestation and report whether it moved.
@@ -315,7 +331,7 @@ impl Journal {
     }
 
     pub(crate) fn response_transition_path(&self) -> PathBuf {
-        self.dir.join("response-transitions.json")
+        self.root.join("response-transitions.json")
     }
 
     /// Persist one response decision and classify its state transition.
@@ -390,8 +406,15 @@ impl Journal {
         name: &str,
         work: impl FnOnce() -> std::io::Result<T>,
     ) -> std::io::Result<T> {
-        create_dir_all(&self.dir)?;
-        let path = self.dir.join(format!("{name}.lock"));
+        // A record kept across sessions is locked where it lives, so two
+        // instances with sessions of their own still exclude each other.
+        let dir = if SHARED_RECORDS.contains(&name) {
+            &self.root
+        } else {
+            &self.dir
+        };
+        create_dir_all(dir)?;
+        let path = dir.join(format!("{name}.lock"));
         // Bounded by wall clock rather than by a retry count. An attempt count
         // is a wait whose length depends on how fast the machine is, which is
         // how this passed everywhere and failed on the slowest Windows runner.
@@ -429,12 +452,15 @@ impl Journal {
         use std::sync::atomic::{AtomicU64, Ordering};
         static ATTEMPT: AtomicU64 = AtomicU64::new(0);
 
-        create_dir_all(&self.dir)?;
+        // Beside the file it replaces, so the rename stays in one directory
+        // whether the file is the session's or kept across sessions.
+        let dir = target.parent().unwrap_or(&self.dir);
+        create_dir_all(dir)?;
         let name = target.file_name().map_or_else(
             || "journal".to_owned(),
             |name| name.to_string_lossy().into_owned(),
         );
-        let scratch = self.dir.join(format!(
+        let scratch = dir.join(format!(
             "{name}.{}.{}.tmp",
             std::process::id(),
             ATTEMPT.fetch_add(1, Ordering::Relaxed)
@@ -869,6 +895,122 @@ impl Journal {
         Ok(values.iter().filter_map(network_record_from_json).collect())
     }
 
+    /// Read bounded process history. A missing or malformed file is empty
+    /// history.
+    ///
+    /// # Errors
+    ///
+    /// Returns non-absence file read errors.
+    pub fn process_history(&self) -> std::io::Result<topgent_core::lineage::Lineage> {
+        let empty =
+            || topgent_core::lineage::Lineage::new(crate::process_history::MAX_PROCESS_HISTORY);
+        let text = match std::fs::read_to_string(self.process_history_path()) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(empty()),
+            Err(error) => return Err(error),
+        };
+        Ok(serde_json::from_str::<Value>(&text).map_or_else(
+            |_| empty(),
+            |value| crate::process_history::process_history_from_json(&value),
+        ))
+    }
+
+    /// Read bounded Audit action history, including unresolved records.
+    ///
+    /// # Errors
+    /// Returns read, oversized-file or malformed-JSON errors.
+    pub fn action_history(&self) -> std::io::Result<Value> {
+        self.read_json("action-history.json")
+    }
+
+    /// Atomically store Audit action history.
+    ///
+    /// # Errors
+    /// Returns write failures or rejects an oversized history.
+    pub fn save_action_history(&self, history: &Value) -> std::io::Result<()> {
+        self.write_json("action-history.json", history)
+    }
+
+    /// Read bounded behaviour-rule findings. They hold rule names, record
+    /// ids, pids and short targets; never arguments.
+    ///
+    /// # Errors
+    /// Returns read, oversized-file or malformed-JSON errors.
+    pub fn behaviour_history(&self) -> std::io::Result<Value> {
+        self.read_json("behaviour-history.json")
+    }
+
+    /// Atomically store behaviour-rule findings.
+    ///
+    /// # Errors
+    /// Returns write failures or rejects an oversized history.
+    pub fn save_behaviour_history(&self, history: &Value) -> std::io::Result<()> {
+        self.write_json("behaviour-history.json", history)
+    }
+
+    /// Read workspace-exfiltration incidents: counts, roots and addresses
+    /// per agent run. Never file names below a root, never payloads.
+    ///
+    /// # Errors
+    /// Returns read, oversized-file or malformed-JSON errors.
+    pub fn incident_history(&self) -> std::io::Result<Value> {
+        self.read_json("incident-history.json")
+    }
+
+    /// Atomically store workspace-exfiltration incidents.
+    ///
+    /// # Errors
+    /// Returns write failures or rejects an oversized history.
+    pub fn save_incident_history(&self, history: &Value) -> std::io::Result<()> {
+        self.write_json("incident-history.json", history)
+    }
+
+    /// A bounded JSON document from the journal, `{}` when there is none.
+    fn read_json(&self, file: &str) -> std::io::Result<Value> {
+        use std::io::Read as _;
+        let handle = match File::open(self.dir.join(file)) {
+            Ok(handle) => handle,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(json!({})),
+            Err(error) => return Err(error),
+        };
+        let mut text = String::new();
+        handle.take(MAX_BYTES + 1).read_to_string(&mut text)?;
+        if text.len() as u64 > MAX_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{file} exceeds the byte limit"),
+            ));
+        }
+        serde_json::from_str(&text)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+    }
+
+    /// Replaces a JSON document atomically, refusing one over the bound.
+    fn write_json(&self, file: &str, value: &Value) -> std::io::Result<()> {
+        if value.to_string().len() as u64 > MAX_BYTES {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("{file} exceeds the byte limit"),
+            ));
+        }
+        self.replace_atomically(&self.dir.join(file), value)
+    }
+
+    /// Atomically replace bounded process history.
+    ///
+    /// # Errors
+    ///
+    /// Returns directory, write, flush, or rename failures.
+    pub fn save_process_history(
+        &self,
+        lineage: &topgent_core::lineage::Lineage,
+    ) -> std::io::Result<()> {
+        self.replace_atomically(
+            &self.process_history_path(),
+            &crate::process_history::process_history_json(lineage),
+        )
+    }
+
     /// Atomically replace bounded metadata-only network history.
     ///
     /// # Errors
@@ -1188,5 +1330,31 @@ mod archive_tests {
         let dir = test_dir("journal-archive-empty");
         assert!(Journal::at(&dir).archive(1)?.is_none());
         Ok(())
+    }
+
+    #[test]
+    fn behaviour_history_survives_reopen_and_is_kept_apart_from_actions() {
+        let dir = crate::test_support::test_dir("behaviour-findings");
+        let journal = Journal::at(&dir);
+        let value = serde_json::json!({"boot": "t", "rows": [{"rule": "R"}]});
+        journal.save_behaviour_history(&value).expect("save");
+        assert_eq!(Journal::at(&dir).behaviour_history().expect("read"), value);
+        assert_eq!(
+            journal.action_history().expect("read"),
+            serde_json::json!({})
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn audit_history_survives_reopen_and_corruption_is_reported() {
+        let dir = crate::test_support::test_dir("audit-actions");
+        let journal = Journal::at(&dir);
+        let value = serde_json::json!({"boot":"test", "rows":[{"record":"1.000:1"}]});
+        journal.save_action_history(&value).expect("save");
+        assert_eq!(Journal::at(&dir).action_history().expect("read"), value);
+        std::fs::write(dir.join("action-history.json"), "{").expect("corrupt fixture");
+        assert!(journal.action_history().is_err());
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

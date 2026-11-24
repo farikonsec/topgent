@@ -228,3 +228,76 @@ fn a_flag_that_is_not_a_flag_is_refused_at_load() {
     let parsed: topgent_collect::model::Signatures = serde_json::from_str(bad).expect("it parses");
     assert!(topgent_collect::model::validate(&parsed).is_err());
 }
+
+#[test]
+fn zcode_reads_its_model_from_the_task_index_as_plain_text() {
+    // As the bytes sit in ZCode 3.15.1's SQLite write-ahead log on Kali: the
+    // record is surrounded by binary page data and other columns.
+    let wal = "\u{0}\u{1}SQLite\u{3}/home/testuser/projects/acme\u{0}glm\u{0}yolo\u{0}\
+               account:zai-start-plan/GLM-5.3\u{0}\u{7}error\u{0}";
+    assert_eq!(
+        extract(SourceKind::Marker, wal, "account:").as_deref(),
+        Some("GLM-5.3")
+    );
+    // The newest task wins.
+    let two =
+        "account:zai-start-plan/GLM-5.1\u{0}...\u{0}account:zai-start-plan/GLM-5.3-Flash\u{0}";
+    assert_eq!(
+        extract(SourceKind::Marker, two, "account:").as_deref(),
+        Some("GLM-5.3-Flash")
+    );
+    // A token cut by the read bound, a token with no model part, and one
+    // with no version yield nothing rather than half a name.
+    for bad in [
+        "account:zai-start-plan/",
+        "account:zai-start-plan",
+        "account:x/latest",
+        "nothing here",
+    ] {
+        assert_eq!(
+            extract(SourceKind::Marker, bad, "account:"),
+            None,
+            "{bad:?}"
+        );
+    }
+    let s = builtin().expect("loads");
+    let zcode = s
+        .families
+        .iter()
+        .find(|f| f.family == "zcode")
+        .expect("zcode is described");
+    assert_eq!(zcode.default_provider, "zhipu");
+    assert_eq!(provider_of(s, "GLM-5.3", &zcode.default_provider), "zhipu");
+    assert!(admissible(s, "GLM-5.3"));
+}
+
+#[test]
+fn codex_reads_the_model_each_turn_used_from_its_log() {
+    // As Codex 158 writes its tracing spans into its SQLite log: the model a
+    // turn sampled from, which can differ from the one config.toml asks for.
+    let wal = "\u{0}run_sampling_request{turn_id=01a1 model=gpt-6.2-sol}\u{0}\u{3}\
+               try_run_sampling_request{turn_id=01a2 model=gpt-6-astra}:receiving_stream\u{0}";
+    assert_eq!(
+        extract(SourceKind::Marker, wal, "model=").as_deref(),
+        Some("gpt-6-astra"),
+        "the newest turn wins"
+    );
+    for bad in ["model=", "model=latest", "model=}"] {
+        assert_eq!(extract(SourceKind::Marker, bad, "model="), None, "{bad:?}");
+    }
+}
+
+#[test]
+fn a_log_names_every_recent_model_newest_first() {
+    let log = "model=gpt-6-astra}\u{0}model=gpt-6-luna}\u{0}model=gpt-6.1-terra}\u{0}\
+               model=gpt-6-luna}\u{0}model=gpt-6.1-terra}";
+    assert_eq!(
+        topgent_collect::model::markers(log, "model=", 8),
+        vec!["gpt-6.1-terra", "gpt-6-luna", "gpt-6-astra"]
+    );
+    assert_eq!(
+        topgent_collect::model::markers(log, "model=", 2),
+        vec!["gpt-6.1-terra", "gpt-6-luna"]
+    );
+    assert!(topgent_collect::model::markers("nothing", "model=", 8).is_empty());
+}

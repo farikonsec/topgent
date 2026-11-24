@@ -67,10 +67,16 @@ impl Collector for ProcessCollector {
                 },
             ));
             if let Some(family) = p.family {
+                // A name is weaker evidence than an install location, and the
+                // family claim says so. The process itself was still seen.
+                let confidence = match crate::signatures::identity_strength(family, &p.exe) {
+                    Some(crate::signatures::IdentityStrength::NameOnly) => Confidence::Likely,
+                    _ => Confidence::Certain,
+                };
                 facts.extend(emit(
                     ID,
                     PROBE,
-                    Confidence::Certain,
+                    confidence,
                     clock,
                     p.subject(),
                     Claim::AgentFamily {
@@ -148,6 +154,7 @@ mod tests {
             uid: 501,
             user: "test".to_owned(),
             parent,
+            pid_namespace: None,
             family,
         }
     }

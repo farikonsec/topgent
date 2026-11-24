@@ -17,7 +17,7 @@ pub(crate) fn network_record_json(record: &NetworkRecord) -> Value {
         "protocol": record.protocol.as_str(),
         "host": record.host,
         "port": record.port,
-        "direction": match record.direction { Direction::Outbound => "outbound", Direction::Listening => "listening" },
+        "direction": record.direction.as_str(),
         "first_seen": record.first_seen,
         "last_seen": record.last_seen,
         "observations": record.observations,
@@ -34,6 +34,7 @@ pub(crate) fn network_record_from_json(value: &Value) -> Option<NetworkRecord> {
     let direction = match value.get("direction")?.as_str()? {
         "outbound" => Direction::Outbound,
         "listening" => Direction::Listening,
+        "inbound" => Direction::Inbound,
         _ => return None,
     };
     let verdict = match value.get("verdict")?.as_str()? {
@@ -134,6 +135,45 @@ mod tests {
             network_record_from_json(&network_record_json(&record)),
             Some(record)
         );
+    }
+
+    /// A protocol no sensor stated, and a direction no build before S2 had,
+    /// must come back from the journal as themselves. `unstated` used to be
+    /// read back as `other`, so one resolver contact showed as two rows.
+    #[test]
+    fn unstated_protocol_and_inbound_direction_round_trip() {
+        use topgent_facts::Protocol;
+        for (protocol, direction) in [
+            (Protocol::Unstated, Direction::Outbound),
+            (Protocol::Tcp, Direction::Inbound),
+            (Protocol::Udp, Direction::Listening),
+            (Protocol::Icmp, Direction::Outbound),
+            (Protocol::Other, Direction::Outbound),
+        ] {
+            let record = NetworkRecord {
+                protocol,
+                agent_pid: 42,
+                agent_started_at: 1_000,
+                agent_family: "codex-cli".to_owned(),
+                host: "192.0.2.53".to_owned(),
+                port: 53,
+                direction,
+                first_seen: 2_000,
+                last_seen: 3_000,
+                observations: 1,
+                packets: None,
+                sample_times: vec![2_000],
+                currently_observed: true,
+                last_visibility_change: 2_000,
+                visibility_changes: 1,
+                verdict: NetworkVerdict::Observed,
+            };
+            assert_eq!(
+                network_record_from_json(&network_record_json(&record)),
+                Some(record),
+                "{protocol:?} {direction:?}"
+            );
+        }
     }
 
     #[test]

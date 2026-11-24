@@ -37,6 +37,12 @@ pub mod space {
 }
 
 /// A small, named type ramp, so that a size means something when it changes.
+///
+/// The ramp is deliberately taller than a dense utility's. The old interface
+/// set almost everything at 11 or 12px, which made a finding and the column
+/// heading above it the same weight, and put an executable path and the
+/// sentence explaining it on the same visual plane. Reading text is now 13-14,
+/// and only genuinely supporting metadata sits at 11-12.
 pub mod size {
     /// Column headings, provenance, the sentence under a finding.
     pub const MICRO: f32 = 11.0;
@@ -44,16 +50,29 @@ pub mod size {
     pub const BODY: f32 = 12.0;
     /// The thing a row is about.
     pub const EMPHASIS: f32 = 13.0;
-    /// A panel heading.
-    pub const HEADING: f32 = 15.0;
+    /// Prose meant to be read rather than scanned: an interpretation, the
+    /// sentence a finding is stated in, the paragraph under a heading.
+    pub const READING: f32 = 14.0;
     /// Navigation and prominent controls.
     pub const LABEL: f32 = 14.0;
+    /// A panel heading.
+    pub const HEADING: f32 = 15.0;
+    /// A section heading inside a reading surface.
+    pub const SECTION: f32 = 17.0;
     /// Navigation and toolbar glyphs.
     pub const ICON: f32 = 18.0;
     /// The product name and a count worth reading across the room.
     pub const DISPLAY: f32 = 20.0;
+    /// The selected agent's name, and the sentence interpreting its score.
+    pub const SUBJECT: f32 = 23.0;
     /// The product wordmark.
     pub const BRAND: f32 = 24.0;
+    /// The workspace title at the top of a page.
+    pub const TITLE: f32 = 25.0;
+    /// A figure in the status strip, read before its label is.
+    pub const METRIC: f32 = 30.0;
+    /// The one number an investigation begins at.
+    pub const SCORE: f32 = 34.0;
 }
 
 /// Corner radius.
@@ -255,34 +274,34 @@ impl Appearance {
     pub const fn palette(self) -> Palette {
         match self {
             Self::Dark => Palette {
-                background: rgb(0x08, 0x0d, 0x17),
-                surface: rgb(0x0f, 0x17, 0x27),
-                raised: rgb(0x1b, 0x29, 0x3f),
-                border: rgb(0x29, 0x3a, 0x52),
-                text: rgb(0xf3, 0xf7, 0xfb),
-                muted: rgb(0xac, 0xb8, 0xc8),
-                faint: rgb(0x7f, 0x90, 0xa8),
-                accent: rgb(0x38, 0xbd, 0xf8),
-                critical: rgb(0xfb, 0x71, 0x85),
-                high: rgb(0xfb, 0x92, 0x3c),
-                medium: rgb(0xfa, 0xcc, 0x15),
-                low: rgb(0x4a, 0xde, 0x80),
-                inert: rgb(0x94, 0xa3, 0xb8),
+                background: rgb(0x12, 0x14, 0x18),
+                surface: rgb(0x1a, 0x1d, 0x22),
+                raised: rgb(0x22, 0x26, 0x2c),
+                border: rgb(0x2d, 0x31, 0x38),
+                text: rgb(0xf2, 0xf0, 0xeb),
+                muted: rgb(0xc9, 0xcd, 0xd3),
+                faint: rgb(0x90, 0x97, 0xa1),
+                accent: rgb(0xf2, 0xf0, 0xeb),
+                critical: rgb(0xf0, 0x7a, 0x74),
+                high: rgb(0xe7, 0xa6, 0x4a),
+                medium: rgb(0xe0, 0xc2, 0x5a),
+                low: rgb(0x5c, 0xc2, 0xb0),
+                inert: rgb(0x90, 0x97, 0xa1),
             },
             Self::Light => Palette {
-                background: rgb(0xf1, 0xf5, 0xf9),
+                background: rgb(0xf6, 0xf4, 0xef),
                 surface: rgb(0xff, 0xff, 0xff),
-                raised: rgb(0xe6, 0xef, 0xfa),
-                border: rgb(0xcb, 0xd5, 0xe1),
-                text: rgb(0x0f, 0x17, 0x2a),
-                muted: rgb(0x47, 0x55, 0x69),
-                faint: rgb(0x64, 0x74, 0x8b),
-                accent: rgb(0x02, 0x84, 0xc7),
-                critical: rgb(0xb9, 0x1c, 0x1c),
-                high: rgb(0xc2, 0x41, 0x0c),
-                medium: rgb(0x85, 0x4d, 0x0e),
-                low: rgb(0x15, 0x80, 0x3d),
-                inert: rgb(0x64, 0x74, 0x8b),
+                raised: rgb(0xee, 0xeb, 0xe4),
+                border: rgb(0xe2, 0xde, 0xd5),
+                text: rgb(0x14, 0x16, 0x1a),
+                muted: rgb(0x3a, 0x40, 0x49),
+                faint: rgb(0x6b, 0x71, 0x7a),
+                accent: rgb(0x14, 0x16, 0x1a),
+                critical: rgb(0xc2, 0x41, 0x3b),
+                high: rgb(0xb8, 0x74, 0x1a),
+                medium: rgb(0x8a, 0x6d, 0x1a),
+                low: rgb(0x2f, 0x8f, 0x7f),
+                inert: rgb(0x6b, 0x71, 0x7a),
             },
             Self::HighContrast => Palette {
                 background: rgb(0x00, 0x00, 0x00),
@@ -434,7 +453,37 @@ pub fn region(role: Region, p: Palette) -> impl Fn(&Theme) -> container::Style {
     }
 }
 
-fn blend(a: Color, b: Color, amount: f32) -> Color {
+/// A filled pill, such as a severity chip. The caller sets the text colour to
+/// one that reads on `fill`.
+pub fn chip(fill: Color) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(fill)),
+        border: Border {
+            color: Color::TRANSPARENT,
+            width: 0.0,
+            radius: radius::CONTROL.into(),
+        },
+        ..container::Style::default()
+    }
+}
+
+/// An incident card: a panel carrying a severity accent, so a critical and a
+/// high finding separate at a glance without colour being the only signal.
+pub fn incident_card(accent: Color, p: Palette) -> impl Fn(&Theme) -> container::Style {
+    move |_| container::Style {
+        background: Some(Background::Color(p.surface)),
+        border: Border {
+            color: blend(accent, p.surface, 0.45),
+            width: 1.5,
+            radius: radius::PANEL.into(),
+        },
+        text_color: Some(p.text),
+        ..container::Style::default()
+    }
+}
+
+/// `a` moved `amount` of the way toward `b`.
+pub(crate) fn blend(a: Color, b: Color, amount: f32) -> Color {
     let amount = amount.clamp(0.0, 1.0);
     let channel = |x: f32, y: f32| x + (y - x) * amount;
     Color {

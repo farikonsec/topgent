@@ -62,6 +62,7 @@ fn activity_network(value: Option<&Value>) -> Option<ActivityNetwork> {
     let direction = match value.get("direction")?.as_str()? {
         "outbound" => Direction::Outbound,
         "listening" => Direction::Listening,
+        "inbound" => Direction::Inbound,
         _ => return None,
     };
     let host = sanitize(value.get("host")?.as_str()?, 255);
@@ -121,7 +122,7 @@ pub(crate) fn activity_json(activity: &Activity) -> Value {
             "collector": event.collector, "probe": event.probe,
             "network": event.network.as_ref().map(|network| json!({
                 "host": network.host, "port": network.port,
-                "direction": match network.direction { Direction::Outbound => "outbound", Direction::Listening => "listening" },
+                "direction": network.direction.as_str(),
                 "phase": network.phase.as_str(), "duration_ms": network.duration_ms,
             })),
         })).collect::<Vec<_>>(),

@@ -21,19 +21,26 @@
 
 pub mod asset_inventory;
 pub mod attribution;
+mod audit;
+pub use audit::syscalls as audit_syscalls;
 pub mod capture;
 pub mod config;
 pub mod container;
+pub mod container_context;
 pub mod dns_event;
 pub mod editor;
 pub mod filesystem;
 pub mod intercept;
 pub mod model;
 pub mod network_event;
+pub mod observed;
 pub mod overhead;
+pub mod procconn;
 pub mod process;
+pub mod process_events;
 pub mod reach;
 pub mod resolve;
+pub mod sensitive;
 pub mod signatures;
 pub mod socket;
 pub mod tool;
@@ -139,7 +146,8 @@ pub struct CollectorRun {
     /// reader needs beyond the fact count. Absent where there is nothing to
     /// add, which is most sensors most of the time.
     pub detail: Option<String>,
-    /// Cumulative events the underlying sensor reports losing, when measurable.
+    /// Losses measured by this sensor; scope and reset interval are sensor-specific.
+    /// This does not account for all upstream loss and cannot prove completeness.
     pub dropped_events: Option<u64>,
     /// What a healthy run of this sensor still cannot supply on this host.
     ///
@@ -148,6 +156,8 @@ pub struct CollectorRun {
     /// green row reads as full coverage of something the platform never
     /// provided.
     pub boundary: Option<&'static str>,
+    /// See [`Collector::continuous`]. `None` for a sampling collector.
+    pub continuous: Option<bool>,
 }
 
 impl fmt::Display for CollectError {
@@ -190,6 +200,18 @@ pub trait Collector {
     /// here, because "quiet" and "busy and unable to attribute any of it" are
     /// different answers that a fact count of zero renders identically.
     fn detail(&self) -> Option<String> {
+        None
+    }
+
+    /// Whether this is a continuous sensor, and if so whether it ran across
+    /// the whole interval since the previous sweep.
+    ///
+    /// `None`, the default, is a sampling collector: it sees the moment it
+    /// looks and nothing between. `Some(true)` is a sensor that was receiving
+    /// for the entire interval, so its loss counter speaks for all of it.
+    /// `Some(false)` is one that was not running for part of it, which leaves
+    /// a gap no counter can account for.
+    fn continuous(&self) -> Option<bool> {
         None
     }
 
@@ -240,6 +262,25 @@ pub struct Sweep {
     pub failures: Vec<(&'static str, CollectError)>,
     /// Health of every requested collector, including successful empty probes.
     pub runs: Vec<CollectorRun>,
+    /// The process table this sweep's collectors saw: the one shared walk,
+    /// kept so history can be built from the same moment as the facts.
+    pub processes: Vec<process::ProcInfo>,
+    /// Process lifecycle events the kernel sensor delivered since the last
+    /// sweep. Empty where no sensor runs.
+    pub process_events: Vec<process_events::LifecycleEvent>,
+    /// File, exec and connect records the Audit readers had not handed over
+    /// before, attributable or not, for resolution against process history.
+    pub observed_actions: Vec<observed::ObservedAction>,
+    /// Syscall events for the behaviour rules, each once, exec arguments in
+    /// memory only.
+    pub syscall_events: Vec<observed::ObservedSyscall>,
+    /// Syscall events the hold dropped because a sweep had not taken them.
+    pub syscall_overflow: u64,
+    /// Audit actions lost by the bounded handover queue in this sweep.
+    pub observed_overflow: u64,
+    /// Running per-process totals of workspace reads and outbound traffic,
+    /// counted before any bound (see [`observed::tally`]).
+    pub totals: observed::tally::Totals,
 }
 
 /// Run every collector, keeping going when one fails.
@@ -248,6 +289,19 @@ pub struct Sweep {
 /// collected and reported rather than propagated.
 #[must_use]
 pub fn sweep(collectors: &[Box<dyn Collector>], clock: &dyn Clock) -> Sweep {
+    process::within_sweep(|| {
+        let mut out = sweep_each(collectors, clock);
+        out.processes = process::snapshot();
+        out.process_events = process_events::take_drained();
+        out.observed_actions = observed::take();
+        (out.syscall_events, out.syscall_overflow) = observed::take_syscalls();
+        out.observed_overflow = observed::take_loss();
+        out.totals = observed::tally::totals(observed::tally_now());
+        out
+    })
+}
+
+fn sweep_each(collectors: &[Box<dyn Collector>], clock: &dyn Clock) -> Sweep {
     let mut out = Sweep::default();
     for c in collectors {
         let started = std::time::Instant::now();
@@ -261,6 +315,7 @@ pub fn sweep(collectors: &[Box<dyn Collector>], clock: &dyn Clock) -> Sweep {
                     detail: c.detail(),
                     dropped_events: c.dropped_events(),
                     boundary: c.boundary(),
+                    continuous: c.continuous(),
                 });
                 out.facts.extend(facts);
             }
@@ -278,6 +333,7 @@ pub fn sweep(collectors: &[Box<dyn Collector>], clock: &dyn Clock) -> Sweep {
                     detail: Some(error.to_string()),
                     dropped_events: c.dropped_events(),
                     boundary: c.boundary(),
+                    continuous: c.continuous(),
                 });
                 out.failures.push((c.id(), error));
             }
@@ -293,6 +349,7 @@ pub fn sweep(collectors: &[Box<dyn Collector>], clock: &dyn Clock) -> Sweep {
 pub fn default_collectors() -> Vec<Box<dyn Collector>> {
     vec![
         Box::new(process::ProcessCollector::default()),
+        Box::new(process_events::ProcessEventCollector),
         Box::new(editor::EditorExtensionCollector),
         Box::new(filesystem::FilesystemEventCollector::default()),
         Box::new(network_event::NetworkEventCollector::default()),
@@ -347,6 +404,46 @@ mod tests {
         fn boundary(&self) -> Option<&'static str> {
             Some("this platform records no connection close")
         }
+    }
+
+    /// A collector that needs process context twice, as several do.
+    struct Walker;
+    impl Collector for Walker {
+        fn id(&self) -> &'static str {
+            "walker"
+        }
+        fn collect(&self, _clock: &dyn Clock) -> Result<Vec<Fact>, CollectError> {
+            let first = crate::process::snapshot();
+            let second = crate::process::snapshot();
+            assert_eq!(
+                first.len(),
+                second.len(),
+                "one sweep, one view of the machine"
+            );
+            Ok(Vec::new())
+        }
+    }
+
+    /// Every collector used to walk the whole process table for itself, about
+    /// eight walks per sweep, each of them a different moment.
+    #[test]
+    fn one_sweep_walks_the_process_table_once() {
+        let collectors: Vec<Box<dyn Collector>> =
+            vec![Box::new(Walker), Box::new(Walker), Box::new(Walker)];
+        let before = crate::process::walks();
+        let _ = sweep(&collectors, &FixedClock(1));
+        assert_eq!(crate::process::walks() - before, 1, "shared within a sweep");
+        let _ = sweep(&collectors, &FixedClock(2));
+        assert_eq!(
+            crate::process::walks() - before,
+            2,
+            "the next sweep sees the machine as it is now"
+        );
+        // Outside a sweep nothing is shared: a response decides on the
+        // process table as it is at that moment.
+        let _ = crate::process::snapshot();
+        let _ = crate::process::snapshot();
+        assert_eq!(crate::process::walks() - before, 4);
     }
 
     #[test]

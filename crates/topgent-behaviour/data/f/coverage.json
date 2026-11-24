@@ -1,0 +1,967 @@
+{
+ "commit": "e822409d8a2a28c9719f56ace66e8cadebfd2bc3",
+ "rules": [
+  {
+   "name": "Directory traversal monitored file read",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Read sensitive file trusted after startup",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Read sensitive file untrusted",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Run shell untrusted",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "System user interactive",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Terminal shell in container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Contact K8S API Server From Container",
+   "live": false,
+   "needs": [
+    "fd.sip.name"
+   ],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": false
+   }
+  },
+  {
+   "name": "Netcat Remote Code Execution in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Search Private Keys or Passwords",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Clear Log Activities",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Remove Bulk Data from Disk",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Create Symlink Over Sensitive Files",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Create Hardlink Over Sensitive Files",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Packet socket created in container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Redirect STDOUT/STDIN to Network Connection in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Linux Kernel Module Injection Detected",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Debugfs Launched in Privileged Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Detect release_agent File Container Escapes",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "PTRACE attached to process",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "PTRACE anti-debug attempt",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Find AWS Credentials",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Execution from /dev/shm",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Drop and execute new binary in container",
+   "live": false,
+   "needs": [
+    "proc.is_exe_upper_layer"
+   ],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": false
+   }
+  },
+  {
+   "name": "Disallowed SSH Connection Non Standard Port",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Fileless execution via memfd_create",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Modify Shell Configuration File",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Schedule Cron Jobs",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Read ssh information",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "DB program spawned process",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Change thread namespace",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Change namespace privileges via unshare",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Privileged Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Excessively Capable Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "System procs network activity",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Program run with disallowed http proxy env",
+   "live": false,
+   "needs": [
+    "proc.env"
+   ],
+   "container_only": false,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": false
+   }
+  },
+  {
+   "name": "Unexpected UDP Traffic",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Non sudo setuid",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "User mgmt binaries",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Create files below dev",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Contact EC2 Instance Metadata Service From Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Contact cloud metadata service from container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Package Management Process in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Suspicious Network Tool in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Suspicious Network Tool on Host",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Delete or rename shell history",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Set Setuid or Setgid bit",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Remote File Copy Tools in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Network Connection outside Local Subnet",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Mount Launched in Privileged Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Ingress Remote File Copy Tools in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Read environment variable from /proc files",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": false
+   }
+  },
+  {
+   "name": "Exfiltrating Artifacts via Kubernetes Control Plane",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Adding ssh keys to authorized_keys",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Potential Local Privilege Escalation via Environment Variables Misuse",
+   "live": false,
+   "needs": [
+    "proc.env"
+   ],
+   "container_only": false,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": false
+   }
+  },
+  {
+   "name": "Backdoored library loaded into SSHD (CVE-2024-3094)",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "BPF Program Not Profiled",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Unexpected inbound connection source",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Read Shell Configuration File",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Update Package Repository",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Write below binary dir",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Write below monitored dir",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Write below etc",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Write below root",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Write below rpm database",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Modify binary dirs",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Mkdir binary dirs",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Sensitive Mount Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Launch Disallowed Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Interpreted procs inbound network activity",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Interpreted procs outbound network activity",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Unexpected K8s NodePort Connection",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Create Hidden Files or Directories",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Detect outbound connections to common miner pool ports",
+   "live": false,
+   "needs": [
+    "fd.sip.name"
+   ],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": false
+   }
+  },
+  {
+   "name": "Detect crypto miners using the Stratum protocol",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Kubernetes Client Tool Launched in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Container Drift Detected (chmod)",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Container Drift Detected (open+create)",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Container Run as Root User",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Sudo Potential Privilege Escalation",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Unprivileged Delegation of Page Faults Handling to a Userspace Process",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Polkit Local Privilege Escalation Vulnerability (CVE-2021-4034)",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Java Process Class File Download",
+   "live": false,
+   "needs": [
+    "evt.buffer"
+   ],
+   "container_only": false,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": false
+   }
+  },
+  {
+   "name": "Modify Container Entrypoint",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Decoding Payload in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Basic Interactive Reconnaissance",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Netcat/Socat Remote Code Execution on Host",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Network Tool Executed During NPM Package Install",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Known Cryptominer Process Executed",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Web Server Spawned Shell",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Web Server Spawned Suspicious Child Process",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Reverse Shell from Web Server",
+   "live": true,
+   "needs": [],
+   "container_only": false,
+   "live_by_source": {
+    "audit": true,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Privileged Container Device Access",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Container Access to Host Sensitive Paths",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "Container Accessing GPU Device",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  },
+  {
+   "name": "GPU Management Tool Run in Container",
+   "live": false,
+   "needs": [],
+   "container_only": true,
+   "live_by_source": {
+    "audit": false,
+    "ebpf": true
+   }
+  }
+ ]
+}

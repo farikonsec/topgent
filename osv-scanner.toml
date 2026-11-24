@@ -59,3 +59,29 @@ reason = "ttf-parser: unmaintained font parser, same path as rustybuzz"
 [[IgnoredVulns]]
 id = "RUSTSEC-2024-0436"
 reason = "paste: unmaintained macro helper, build-time only, no runtime surface"
+
+# ---------------------------------------------------------------------------
+# Unmaintained notices that arrived with iced 0.14, recorded 2026-11-24.
+#
+# zvariant, zvariant_derive and zbus_names 5.15.0 / 4.3.4: iced_winit -> mundy
+# -> zbus, used on Linux to read the desktop colour scheme over D-Bus. No
+# replacement release exists; the fix is an iced upgrade.
+#
+# pin-utils 0.1.0: iced_futures -> wasmtimer, compiled only for wasm32. Not in
+# any native build.
+# ---------------------------------------------------------------------------
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0370"
+reason = "zvariant: unmaintained, reached through iced's Linux D-Bus theme query"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0372"
+reason = "zvariant_derive: unmaintained, same path as zvariant"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0371"
+reason = "zbus_names: unmaintained, same path as zvariant"
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0441"
+reason = "pin-utils: unmaintained, wasm32-only path through iced_futures"

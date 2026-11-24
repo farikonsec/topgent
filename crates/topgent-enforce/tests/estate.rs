@@ -464,6 +464,7 @@ fn topgent_refuses_to_kill_itself_or_the_session_it_runs_in() {
         uid: 0,
         user: "root".to_owned(),
         parent: None,
+        pid_namespace: None,
         family: None,
     };
     assert!(matches!(guard.check(&init), Err(Refusal::Protected { .. })));

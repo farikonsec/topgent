@@ -20,8 +20,6 @@ use iced::{Element, Length};
 /// Which table. Sort and search are remembered per table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Id {
-    /// The agent list.
-    Agents,
     /// Resources an agent declared or was observed using.
     Access,
     /// Network endpoints.
@@ -36,6 +34,14 @@ pub enum Id {
     Health,
     /// The binaries the sensors run.
     Tools,
+    /// An agent's process history.
+    Processes,
+    /// Retained Audit actions.
+    Actions,
+    /// Behaviour rules that held.
+    Findings,
+    /// The behaviour rule catalogue and what each rule needs.
+    RuleCatalogue,
 }
 
 /// How a cell's text is aligned, which follows from what it is.
@@ -331,6 +337,7 @@ fn draw<'a>(
         sort_rows(&mut rows, sort, column.sorts);
     }
 
+    let width = readable_width(columns, state, width, s);
     let portions: u16 = columns
         .iter()
         .enumerate()
@@ -350,7 +357,7 @@ fn draw<'a>(
                 text(if total == 0 {
                     empty.to_string()
                 } else {
-                    format!("Nothing in these {total} rows matches that.")
+                    "No rows match.".to_owned()
                 })
                 .size(s.type_size(size::BODY))
                 .color(p.faint),
@@ -365,19 +372,50 @@ fn draw<'a>(
         }
     }
 
+    // Keep heading and rows in one horizontal viewport, while the row list
+    // retains its own vertical scroll. At narrow widths a column remains
+    // readable instead of being compressed to a few characters or cut off.
+    let grid = Column::new()
+        .push(heading_row(id, columns, state, width, s))
+        .push(iced::widget::scrollable(body).height(Length::Fill))
+        .width(Length::Fixed(width))
+        .height(Length::Fill);
     Column::new()
         .push(search_box(id, state, total, rows.len(), s))
-        // The heading sits outside the scroll region, so scrolling a long
-        // table keeps its column names. Inside it, they leave with the first
-        // rows and the rest becomes unlabelled columns.
-        .push(heading_row(id, columns, state, width, s))
         .push(
-            iced::widget::scrollable(body)
+            iced::widget::scrollable(grid)
+                .horizontal()
                 .width(Length::Fill)
                 .height(Length::Fill),
         )
         .spacing(s.pad(space::HAIR))
         .into()
+}
+
+/// Minimum width that keeps headings and reader-adjusted columns reachable.
+/// The table may grow with its pane, but it never squeezes its columns below
+/// this budget; the horizontal scrollbar then exposes the overflow.
+fn readable_width(columns: &[Column2], state: &State, available: f32, s: Style) -> f32 {
+    let heading_font = s.type_size(size::MICRO);
+    let portions: u16 = columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| state.portion(index, column))
+        .sum();
+    // Rows divide the width by portion. Summing per-column minima can still
+    // squeeze a heading assigned a small portion, even in a scrollable table.
+    let pixels_per_portion = columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let characters = u16::try_from(column.label.chars().count()).unwrap_or(u16::MAX);
+            let heading = f32::from(characters) * heading_font * 0.75 + s.pad(space::BASE);
+            heading / f32::from(state.portion(index, column).max(1))
+        })
+        .fold(22.0_f32, f32::max);
+    let boundaries = u16::try_from(columns.len().saturating_sub(1)).unwrap_or(u16::MAX);
+    let gaps = f32::from(boundaries) * (s.pad(space::SNUG) + 5.0);
+    available.max(pixels_per_portion * f32::from(portions) + gaps + s.pad(space::BASE) * 2.0)
 }
 
 fn sort_rows(rows: &mut [Row], sort: Sort, sorts: Sorts) {
@@ -499,7 +537,7 @@ fn heading_row<'a>(
 
         let cell: Element<'a, Message> = if column.sorts == Sorts::No {
             container(heading)
-                .width(Length::FillPortion(column.portion))
+                .width(Length::FillPortion(state.portion(index, column)))
                 .into()
         } else {
             button(heading)
@@ -971,5 +1009,32 @@ mod tests {
         assert!(r.matches("local/bin"));
         assert!(r.matches("claude-code"));
         assert!(!r.matches("codex"));
+    }
+
+    #[test]
+    fn wide_evidence_scrolls_instead_of_crushing_columns() {
+        let columns = [
+            Column2::text("HOST", 5),
+            Column2::text("ADDRESS", 4).mono(),
+            Column2::text("DIRECTION", 3),
+            Column2::text("VERDICT", 3),
+        ];
+        let state = State::default();
+        let s = Style::default();
+        let minimum = readable_width(&columns, &state, 300.0, s);
+        assert!(minimum > 300.0);
+        assert!(
+            (readable_width(&columns, &state, minimum + 100.0, s) - minimum - 100.0).abs() < 0.01
+        );
+    }
+
+    #[test]
+    fn a_wider_reader_chosen_column_increases_the_scrollable_width() {
+        let columns = [Column2::text("RESOURCE", 8), Column2::text("SECRET", 2)];
+        let mut state = State::default();
+        let s = Style::default();
+        let before = readable_width(&columns, &state, 250.0, s);
+        state.widths.insert(0, 20);
+        assert!(readable_width(&columns, &state, 250.0, s) > before);
     }
 }

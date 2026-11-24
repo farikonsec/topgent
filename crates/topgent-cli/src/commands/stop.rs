@@ -15,7 +15,29 @@ use topgent_journal::Journal;
 
 /// Stop one agent, with the guards the enforcement crate owns.
 pub(crate) fn stop_command(args: &[String]) -> i32 {
-    let Some(pid) = args.get(1).and_then(|p| p.parse::<u32>().ok()) else {
+    let pid = if let Some(index) = args.iter().position(|arg| arg == "--number") {
+        let Some(number) = args
+            .get(index + 1)
+            .and_then(|value| value.parse::<usize>().ok())
+        else {
+            eprintln!("topgent stop: --number needs a positive row number");
+            return 2;
+        };
+        let observed = topgent_report::observe();
+        let mut ranked = topgent_core::analyse_with(&observed.sweep.facts, &observed.policy);
+        ranked.sort_by(|a, b| {
+            b.1.score
+                .cmp(&a.1.score)
+                .then_with(|| a.0.id.pid.cmp(&b.0.id.pid))
+        });
+        let Some((agent, _)) = ranked.get(number.saturating_sub(1)) else {
+            eprintln!("topgent stop: no process in row {number}; run topgent to refresh the list");
+            return 1;
+        };
+        agent.id.pid
+    } else if let Some(pid) = args.get(1).and_then(|p| p.parse::<u32>().ok()) {
+        pid
+    } else {
         eprintln!("topgent stop: needs a pid\n\n{USAGE}");
         return 2;
     };

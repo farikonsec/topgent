@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "source": "Detection signatures for a monitor: file-name and path patterns whose READ by an agent is worth reporting. Built from MITRE ATT&CK T1552 and T1555, the sensitive-file lists in the pinned behaviour catalogue, and the FILENAME signatures used by the open-source secret scanners gitleaks and the gitrob/shhgit lineage it draws on. Only their path/filename rules are borrowed: gitleaks and trufflehog mainly match secret patterns inside file contents, which Topgent never reads. Matched on the path alone; Topgent never opens a file to decide.",
+  "note": "A matcher holds when every field it carries holds. name is the whole lower-cased file name; prefix and suffix are parts of it; path is a lower-cased substring of the whole path; within lists path substrings of which one must be present. A class marked store holds many credentials at once, so an agent opening one is worth reporting whether or not anything leaves.",
+  "exclude": {
+    "path": ["/node_modules/", "/site-packages/", "/dist-packages/", "/vendor/", "/.cargo/registry/", "/go/pkg/mod/"],
+    "name_contains": ["cacert", "ca-bundle", "ca-certificates"],
+    "name": [".env.example", ".env.sample", ".env.template", ".env.dist"],
+    "suffix": [".pub"]
+  },
+  "classes": [
+    {
+      "id": "private_key",
+      "name": "private key",
+      "matchers": [
+        {"prefix": "id_rsa"}, {"prefix": "id_dsa"}, {"prefix": "id_ecdsa"}, {"prefix": "id_ed25519"},
+        {"suffix": ".pem"}, {"suffix": ".key"}, {"suffix": ".p8"}, {"suffix": ".p12"}, {"suffix": ".pfx"},
+        {"suffix": ".pkcs12"}, {"suffix": ".jks"}, {"suffix": ".keystore"}, {"suffix": ".ppk"},
+        {"suffix": ".asc"}, {"suffix": ".pgp"}, {"suffix": ".gpg"},
+        {"name": "secring.gpg"}, {"name": "otr.private_key"}, {"path": "/.gnupg/private-keys-v1.d/"}
+      ]
+    },
+    {
+      "id": "vpn_or_remote",
+      "name": "VPN or remote-access profile",
+      "matchers": [
+        {"suffix": ".ovpn"}, {"suffix": ".rdp"}, {"suffix": ".cscfg"}, {"path": "/tunnelblick/"}
+      ]
+    },
+    {
+      "id": "password_manager",
+      "name": "password manager vault",
+      "store": true,
+      "matchers": [
+        {"suffix": ".kdbx"}, {"suffix": ".kdb"}, {"suffix": ".opvault"}, {"suffix": ".1pux"},
+        {"suffix": ".1pif"}, {"suffix": ".agilekeychain"}, {"suffix": ".enpassdb"}, {"suffix": ".psafe3"},
+        {"path": "/.password-store/"}
+      ]
+    },
+    {
+      "id": "browser_store",
+      "name": "saved browser passwords or cookies",
+      "store": true,
+      "matchers": [
+        {"name": "login data"}, {"name": "cookies"}, {"name": "web data"},
+        {"name": "logins.json"}, {"name": "key4.db"}, {"name": "cookies.sqlite"},
+        {"name": "cookies.binarycookies"}
+      ]
+    },
+    {
+      "id": "os_keychain",
+      "name": "operating-system keychain or keyring",
+      "store": true,
+      "matchers": [
+        {"suffix": ".keychain-db"}, {"suffix": ".keychain"},
+        {"path": "/library/keychains/"}, {"path": "/.local/share/keyrings/"}, {"suffix": ".kwl"}
+      ]
+    },
+    {
+      "id": "crypto_wallet",
+      "name": "cryptocurrency wallet",
+      "store": true,
+      "matchers": [
+        {"name": "wallet.dat"}, {"suffix": ".wallet"}, {"prefix": "utc--"}, {"path": "/.electrum/wallets/"}
+      ]
+    },
+    {
+      "id": "cloud_credential",
+      "name": "cloud or deployment credential",
+      "matchers": [
+        {"name": "credentials", "within": ["/.aws/"]},
+        {"name": "config", "within": ["/.aws/", "/.kube/", "/.git/"]},
+        {"name": "application_default_credentials.json"}, {"name": "access_tokens.db"},
+        {"name": "config.json", "within": ["/.docker/"]},
+        {"name": ".dockercfg"},
+        {"name": "hosts.yml", "within": ["/gh/"]},
+        {"name": ".netrc"}, {"name": ".git-credentials"},
+        {"name": "settings.xml", "within": ["/.m2/"]},
+        {"name": "credentials.toml", "within": ["/.cargo/"]},
+        {"name": ".vault-token"}, {"suffix": ".tfstate"}, {"suffix": ".tfvars"},
+        {"name": ".s3cfg"}, {"name": ".pgpass"}, {"name": ".my.cnf"},
+        {"name": "sftp-config.json"}, {"name": ".ftpconfig"}, {"name": "knife.rb"}
+      ]
+    },
+    {
+      "id": "app_secret",
+      "name": "application secret file",
+      "matchers": [
+        {"name": ".env"}, {"prefix": ".env."}, {"name": ".envrc"},
+        {"prefix": "secrets."}, {"prefix": "credentials."},
+        {"name": ".npmrc"}, {"name": ".pypirc"}, {"name": ".htpasswd"},
+        {"name": "database.yml"}, {"name": "wp-config.php"}, {"name": "secret_token.rb"},
+        {"suffix": ".age"}
+      ]
+    },
+    {
+      "id": "database_dump",
+      "name": "database file or dump",
+      "matchers": [
+        {"suffix": ".sqlitedb"}, {"suffix": ".sqldump"}, {"suffix": ".mdf"},
+        {"suffix": ".sdf"}, {"suffix": ".dump"}
+      ]
+    },
+    {
+      "id": "shell_history",
+      "name": "shell or client history",
+      "matchers": [
+        {"name": ".bash_history"}, {"name": ".zsh_history"}, {"name": ".sh_history"},
+        {"name": ".psql_history"}, {"name": ".mysql_history"}, {"name": ".python_history"},
+        {"name": ".irb_history"}, {"name": ".rediscli_history"}
+      ]
+    }
+  ]
+}

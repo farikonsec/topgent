@@ -663,14 +663,14 @@ fn a_disallowed_shared_host_extension_is_scored_without_relabelling_the_host() {
 }
 
 #[test]
-fn a_sandboxed_agent_reaching_outside_its_sandbox_is_critical() {
-    use topgent_facts::Direction;
-    // Declares a sandbox (marker path, denied), then opens outbound network.
+fn a_sandboxed_agent_touching_a_path_it_declared_off_limits_is_critical() {
+    // Declares a sandbox and denies a path, then is observed writing to it.
     let escaped = assess(&only(
         &Stream::new(1)
             .seen("/bin/codex", 501, "testuser")
             .declares("<sandbox>", Access::Execute, false)
-            .socket("8.8.8.8", 53, Direction::Outbound)
+            .declares("/etc/cron.d/job", Access::Write, false)
+            .touched("/etc/cron.d/job", Access::Write)
             .build(),
     ));
     assert!(
@@ -679,6 +679,23 @@ fn a_sandboxed_agent_reaching_outside_its_sandbox_is_critical() {
         codes(&escaped)
     );
     assert_eq!(escaped.grade, Grade::Critical);
+    let factor = escaped
+        .factors
+        .iter()
+        .find(|factor| factor.code == FactorCode::SandboxEscape)
+        .expect("sandbox factor");
+    // The finding says what was observed, and does not claim a confirmed
+    // escape the evidence cannot establish.
+    assert!(
+        factor.source.contains("/etc/cron.d/job"),
+        "{}",
+        factor.source
+    );
+    assert!(
+        !factor.title.to_lowercase().contains("escape"),
+        "{}",
+        factor.title
+    );
 
     // A sandboxed agent that stays put is not flagged.
     let contained = assess(&only(
@@ -688,6 +705,28 @@ fn a_sandboxed_agent_reaching_outside_its_sandbox_is_critical() {
             .build(),
     ));
     assert!(!codes(&contained).contains(&FactorCode::SandboxEscape));
+}
+
+/// A sandbox can allow networking, and a sandboxed agent always talks to its
+/// own model provider. Without knowing which process opened the connection,
+/// and whether the sandbox forbids it, a connection is not an escape.
+#[test]
+fn outbound_traffic_from_a_sandboxed_agent_is_not_an_escape() {
+    use topgent_facts::Direction;
+    let talking = assess(&only(
+        &Stream::new(3)
+            .seen("/bin/codex", 501, "testuser")
+            .declares("<sandbox>", Access::Execute, false)
+            .socket("203.0.113.10", 443, Direction::Outbound)
+            .socket("8.8.8.8", 53, Direction::Outbound)
+            .build(),
+    ));
+    assert!(
+        !codes(&talking).contains(&FactorCode::SandboxEscape),
+        "{:?}",
+        codes(&talking)
+    );
+    assert_ne!(talking.grade, Grade::Critical);
 }
 
 #[test]
@@ -831,4 +870,39 @@ fn one_observed_credential_read_outscores_a_dozen_reachable_ones() {
         observed.score,
         context.score
     );
+}
+
+/// The live S6 run: a sandboxed Codex (`workspace-write`) whose child read a
+/// file in /tmp and ran /bin/cat. Codex's sandbox allows both. The sandbox
+/// marker names no path off limits, so neither is a path it declared denied,
+/// and neither is drift from a declaration it never made. A write is still
+/// closed: the sandbox modes do deny writes outside the workspace.
+#[test]
+fn a_sandbox_marker_alone_denies_no_path() {
+    let risk = assess(&only(
+        &Stream::new(4)
+            .seen("/bin/codex", 501, "testuser")
+            .declares("<sandbox>", Access::Execute, false)
+            .touched("/tmp/lab/credentials", Access::Read)
+            .touched("/bin/cat", Access::Execute)
+            .build(),
+    ));
+    assert!(
+        !codes(&risk).contains(&FactorCode::SandboxEscape),
+        "{:?}",
+        codes(&risk)
+    );
+    assert!(
+        !codes(&risk).contains(&FactorCode::DeclarationDrift),
+        "{:?}",
+        codes(&risk)
+    );
+    let wrote = assess(&only(
+        &Stream::new(5)
+            .seen("/bin/codex", 501, "testuser")
+            .declares("<sandbox>", Access::Execute, false)
+            .touched("/home/testuser/.bashrc", Access::Write)
+            .build(),
+    ));
+    assert!(codes(&wrote).contains(&FactorCode::SandboxEscape));
 }

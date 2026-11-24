@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "rule": "FILES_DESTROYED",
+  "summary": "One run deleted or renamed away many files it had just read, or rewrote many of them after running an encryption program.",
+  "thresholds": {
+    "window_ms": 300000,
+    "destroyed_files": 50,
+    "rewritten_files": 50
+  },
+  "thresholds_explained": {
+    "window_ms": "How close together the deletes and renames must be to count as one event (5 minutes).",
+    "destroyed_files": "Files the run read and then deleted or renamed to another name, within the window, that fire on their own (50). Only files it read first count, so clearing a build folder or switching a git branch, which delete without reading, do not.",
+    "rewritten_files": "Files the run read and then reopened for writing with truncation (50). A formatter does exactly this, so it fires only when the run also ran an encryption program."
+  },
+  "card": {
+    "kind": "files_destroyed",
+    "name": "Files Encrypted or Destroyed",
+    "severity": "critical",
+    "why": [
+      "Reading a file and then deleting it or renaming it away, for dozens of files in minutes, is how ransomware replaces files with encrypted copies.",
+      "A coding agent edits files in place. It has no task that needs to delete or rename away most of what it just read."
+    ],
+    "actions": [
+      "Stop the program at once: each minute it runs, more files are replaced.",
+      "Restore the folder from version control or a backup before anything else writes to it."
+    ],
+    "limits": [
+      "Topgent counts opens, renames and deletes. It does not read the files, so it cannot show the new contents are encrypted, only that the originals were replaced.",
+      "A change counts only when the same process read the file first. A run that reads in one process and deletes in another is not added up.",
+      "Rewriting files in place without deleting or renaming them fires only alongside a separate encryption program; encryption inside the program itself is not seen."
+    ]
+  }
+}

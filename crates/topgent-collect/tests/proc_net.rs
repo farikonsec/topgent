@@ -128,3 +128,43 @@ fn the_table_is_bounded() {
     }
     assert!(parse_table(&text).len() <= 8192);
 }
+
+/// A loopback server and its client, as the kernel lists them: the listener on
+/// 8080, the connection it accepted, and the client's own end.
+const ACCEPTED: &str = "\
+  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 00000000:1F90 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 100 1 0000 10 0 0 10 0
+   1: 0100007F:1F90 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 101 1 0000 10 0 0 10 0
+   2: 0100007F:C350 0100007F:1F90 01 00000000:00000000 00:00000000 00000000  1000        0 102 1 0000 10 0 0 10 0
+";
+
+#[test]
+fn a_connection_accepted_on_a_listening_port_is_inbound() {
+    // Every established row used to be outbound. A dev server with twenty
+    // browser tabs open then looked like an agent reaching twenty hosts.
+    let rows = parse_table(ACCEPTED);
+    assert_eq!(rows.len(), 3);
+    let accepted = rows.iter().find(|row| row.inode == 101).expect("accepted");
+    assert_eq!(accepted.direction, Direction::Inbound);
+    assert_eq!(
+        (accepted.host.as_str(), accepted.port),
+        ("127.0.0.1", 0xC350)
+    );
+    let client = rows.iter().find(|row| row.inode == 102).expect("client");
+    assert_eq!(client.direction, Direction::Outbound);
+    assert_eq!(client.port, 8080);
+}
+
+#[test]
+fn a_listener_on_one_address_does_not_claim_connections_on_another() {
+    // Listening on 127.0.0.1:8080 says nothing about a socket whose local end
+    // is 10.0.0.5:8080.
+    let text = "\
+header
+   0: 0100007F:1F90 00000000:0000 0A 0:0 0:0 0 1000 0 200 1
+   1: 0500000A:1F90 0100000A:01BB 01 0:0 0:0 0 1000 0 201 1
+";
+    let rows = parse_table(text);
+    let other = rows.iter().find(|row| row.inode == 201).expect("row");
+    assert_eq!(other.direction, Direction::Outbound);
+}

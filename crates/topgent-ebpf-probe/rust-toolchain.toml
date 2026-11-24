@@ -1,0 +1,9 @@
+# The probe needs nightly (`-Z build-std=core` for the BPF target). Pinned, not
+# floating: `bpf-linker` must read the bitcode this compiler writes, so both
+# must use the same LLVM major. This nightly uses LLVM 22.1.8, which matches
+# `bpf-linker` built with `--features llvm-22` (see docs/ebpf/PLAN.md, E0).
+# Move both together, never one alone.
+[toolchain]
+channel = "nightly-2026-07-01"
+components = ["rust-src"]
+profile = "minimal"

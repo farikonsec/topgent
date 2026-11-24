@@ -1,0 +1,16 @@
+[package]
+name = "topgent-ebpf-common"
+description = "What Topgent's kernel probe tells user space, laid out once for both sides."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+# No dependencies: this crate also compiles for the BPF target, as a path
+# dependency of topgent-ebpf-probe.
+[dependencies]
+
+[lints]
+workspace = true

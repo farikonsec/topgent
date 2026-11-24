@@ -76,6 +76,7 @@ const fn claim_shape(claim: &Claim) -> &'static str {
         Claim::AgentFamily { .. } => "AgentFamily(family)",
         Claim::EditorExtensionActive { .. } => "EditorExtensionActive(family,extension_id)",
         Claim::ModelInUse { .. } => "ModelInUse(provider,model)",
+        Claim::ModelSeen { .. } => "ModelSeen(provider,model)",
         Claim::ConnectorDeclared { .. } => "ConnectorDeclared(name,access)",
         Claim::InvokesAgent { .. } => "InvokesAgent(target_pid,via)",
         Claim::SubjectNotEvaluated { .. } => "SubjectNotEvaluated(reason)",
@@ -108,6 +109,7 @@ const CLAIMS: &[&str] = &[
     "AgentFamily(family)",
     "EditorExtensionActive(family,extension_id)",
     "ModelInUse(provider,model)",
+    "ModelSeen(provider,model)",
     "ConnectorDeclared(name,access)",
     "InvokesAgent(target_pid,via)",
     "SubjectNotEvaluated(reason)",
@@ -146,6 +148,7 @@ fn scalars() -> Vec<String> {
         match value {
             Direction::Outbound => "Direction::Outbound",
             Direction::Listening => "Direction::Listening",
+            Direction::Inbound => "Direction::Inbound",
         }
     }
     const fn protocol(value: Protocol) -> &'static str {
@@ -204,7 +207,11 @@ fn scalars() -> Vec<String> {
     ] {
         out.push(access(value).to_owned());
     }
-    for value in [Direction::Outbound, Direction::Listening] {
+    for value in [
+        Direction::Outbound,
+        Direction::Listening,
+        Direction::Inbound,
+    ] {
         out.push(direction(value).to_owned());
     }
     for value in [

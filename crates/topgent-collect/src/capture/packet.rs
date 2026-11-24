@@ -102,7 +102,9 @@ pub fn parse(frame: &[u8], link: LinkKind, locals: &[IpAddr]) -> Option<Observed
     // direction rather than being decided again.
     let (peer, peer_port, local_port) = match direction {
         Direction::Outbound => (destination, destination_port, source_port),
-        Direction::Listening => (source, source_port, destination_port),
+        // A capture never reads a packet as inbound, but the peer of one would
+        // be its source, exactly as for a listener.
+        Direction::Listening | Direction::Inbound => (source, source_port, destination_port),
     };
     // A packet on a port-bearing protocol with no local port cannot be tied to
     // any process: there is no socket on port zero for the inode map to find.

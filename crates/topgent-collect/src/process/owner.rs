@@ -303,6 +303,7 @@ mod tests {
             uid: 0,
             user: "someone".to_owned(),
             parent: None,
+            pid_namespace: None,
             family: Some("claude-code"),
             owner,
         };

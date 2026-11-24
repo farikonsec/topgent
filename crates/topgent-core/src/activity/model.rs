@@ -121,6 +121,7 @@ impl Ord for ActivityNetwork {
         let direction = |value| match value {
             Direction::Outbound => 0_u8,
             Direction::Listening => 1_u8,
+            Direction::Inbound => 2_u8,
         };
         (
             &self.host,

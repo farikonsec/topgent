@@ -44,8 +44,10 @@ pub mod cooldown;
 pub mod event_log;
 pub mod journal;
 pub mod network;
+pub mod process_history;
 pub mod semantic;
 pub mod sensor_health;
+pub mod session;
 pub mod sweep;
 #[cfg(test)]
 mod test_support;
@@ -59,6 +61,10 @@ pub use event_log::{Entry, GradeMove, Kind};
 pub use journal::{Journal, state_dir};
 pub use semantic::{MAX_SEMANTIC_RECORDS, SemanticRecord};
 pub use sensor_health::{MAX_SENSOR_HEALTH_RECORDS, SensorHealthRecord};
+pub use session::{
+    SESSION_DIR_ENV, SESSION_EXTENSION, SavedSession, begin_session, discard_session, list_saved,
+    load_session, parse_session, save_session, saved_sessions_dir, session_dir,
+};
 pub use sweep::{SWEEP_LOCK_STALE_MS, Seen, SeenKey, UNCLASSIFIED, diff, reconcile, snapshot};
 pub use transition::{MAX_RESPONSE_TRANSITIONS, ResponseTransition};
 
