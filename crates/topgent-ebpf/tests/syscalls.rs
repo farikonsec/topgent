@@ -275,7 +275,13 @@ fn check_credentials(call: &Call) {
         0,
         "root has CAP_SYS_ADMIN: {effective:#x}"
     );
-    assert!(call.record.login_uid().is_some(), "the login uid was read");
+    // A login uid exists only inside a login session (ssh, a console). A CI
+    // runner's sudo has none, and the kernel then reports it as unset.
+    let in_session =
+        fs::read_to_string("/proc/self/loginuid").is_ok_and(|id| id.trim() != "4294967295");
+    if in_session {
+        assert!(call.record.login_uid().is_some(), "the login uid was read");
+    }
 }
 
 #[test]
@@ -427,16 +433,32 @@ fn the_working_directory_arrives_with_an_exec_and_a_relative_call() {
         .expect("a working directory ahead of the exec");
     assert_eq!(cwd_of(at_exec).as_deref(), Some(dir.as_str()));
 
-    let open = calls
-        .iter()
-        .find(|c| {
+    // The syscall buffer is drained on its own schedule and can trail the
+    // exec buffer on a busy host, so keep draining for up to two seconds.
+    let mut found = None;
+    for _ in 0..20 {
+        found = calls.iter().position(|c| {
             c.pid == exec.pid
                 && probe
                     .syscall_name(c.call)
                     .is_some_and(|n| n.starts_with("open"))
                 && c.path() == Some(&b"rel"[..])
-        })
-        .expect("cat's relative open");
+        });
+        if found.is_some() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+        probe.drain_syscalls(&mut calls);
+        probe.take_call_cwds(&mut call_cwds);
+    }
+    let Some(open) = found.and_then(|i| calls.get(i)) else {
+        let mine: Vec<_> = calls
+            .iter()
+            .filter(|c| c.pid == exec.pid)
+            .map(|c| (probe.syscall_name(c.call), c.path()))
+            .collect();
+        panic!("cat's relative open; cat's calls: {mine:?}");
+    };
     let with_call = call_cwds
         .iter()
         .find(|c| c.tid == open.tid && c.boot_ns == open.boot_ns)
