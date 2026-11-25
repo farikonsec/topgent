@@ -4,6 +4,15 @@ Notable changes per release. Format follows [Keep a Changelog](https://keepachan
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-11-25
+
+### Fixed
+- Linux eBPF sensor: on some x86-64 kernels (7.0, measured on Ubuntu 24.04 Azure hosts) the per-syscall enter tracepoints delivered about two thirds of calls, so file reads, connections and other traced calls were missed at random. The enter side now attaches to `raw_syscalls/sys_enter`, which delivered every call, where its record layout matches; other kernels keep the previous attachment.
+- The socket-table `close` handler moves with it, so closes are no longer missed on those kernels.
+
+### Changed
+- CI skips a Unix-only viewer test on Windows, and the eBPF root tests no longer assume a login session or a quiet host.
+
 ## [0.6.0] - 2026-11-24
 
 ### Added
@@ -259,7 +268,8 @@ The Linux desktop build is withheld. Tauri renders its Linux window through GTK3
 
 Documented in `THREAT-MODEL.md` and the Limits section of `README.md`. No pre-execution blocking on macOS or Windows, no per-extension attribution within a shared editor process, and no telemetry the platform does not supply.
 
-[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/farikonsec/topgent/compare/v0.6.1...HEAD
+[0.6.1]: https://github.com/farikonsec/topgent/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/farikonsec/topgent/compare/v0.5.1...v0.6.0
 [0.5.1]: https://github.com/farikonsec/topgent/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/farikonsec/topgent/compare/v0.4.0...v0.5.0

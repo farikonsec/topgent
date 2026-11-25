@@ -155,6 +155,22 @@ pub const SYS_ENTER_PROGRAM: &str = "on_sys_enter";
 pub const SYS_EXIT_PROGRAM: &str = "on_sys_exit";
 /// Tracepoint category of both.
 pub const SYSCALLS_CATEGORY: &str = "syscalls";
+/// Tracepoint category of the generic syscall tracepoints, which carry the
+/// syscall number in the record. Their `sys_enter` is used for the enter side
+/// where it matches the per-syscall layout: on some kernels (7.0 on x86-64,
+/// measured 2026-11-25) the per-syscall enter tracepoints deliver only about
+/// two thirds of calls to BPF, while `raw_syscalls/sys_enter` and the
+/// per-syscall exits deliver all of them.
+pub const RAW_SYSCALLS_CATEGORY: &str = "raw_syscalls";
+/// Probe global: the `close` syscall's number when the close program shares
+/// `raw_syscalls/sys_enter` and has to pick its own calls, else [`ABSENT`].
+pub const CLOSE_NR: &str = "CLOSE_NR";
+
+/// The `close` syscall's number on the architecture this was compiled for.
+#[must_use]
+pub const fn close_number() -> u32 {
+    if cfg!(target_arch = "aarch64") { 57 } else { 3 }
+}
 /// Probe global: offset of `__syscall_nr` in enter and exit records.
 pub const SYS_NR: &str = "SYS_NR";
 /// Probe global: offset of the first argument in an enter record. Every

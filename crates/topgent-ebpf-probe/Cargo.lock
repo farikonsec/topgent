@@ -257,7 +257,7 @@ dependencies = [
 
 [[package]]
 name = "topgent-ebpf-common"
-version = "0.6.0"
+version = "0.6.1"
 
 [[package]]
 name = "topgent-ebpf-probe"

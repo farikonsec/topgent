@@ -8,11 +8,11 @@ use aya::{
     programs::TracePoint,
 };
 use topgent_ebpf_common::{
-    ABSENT, ARGV_AT_EXEC_FIELDS, ARGV_PROGRAMS, ArgvRecord, BTF_FIELDS, CLOSE_PROGRAM, CWD_FIELDS,
-    CwdRecord, EVENTS_MAP, FIELD_SETTINGS, FieldSetting, HOST_PIDNS_DEV, HOST_PIDNS_INO,
-    LOST_EVENTS, LOST_MAP, LOST_SYSCALLS, ProcessEvent, SPECS_MAP, SYS_ARGS, SYS_ENTER_PROGRAM,
-    SYS_EXIT_PROGRAM, SYS_NR, SYS_RET, SYSCALL_SPECS, SYSCALLS_CATEGORY, SYSCALLS_MAP,
-    SyscallRecord, TRACEPOINTS, syscall_numbers,
+    ABSENT, ARGV_AT_EXEC_FIELDS, ARGV_PROGRAMS, ArgvRecord, BTF_FIELDS, CLOSE_NR, CLOSE_PROGRAM,
+    CWD_FIELDS, CwdRecord, EVENTS_MAP, FIELD_SETTINGS, FieldSetting, HOST_PIDNS_DEV,
+    HOST_PIDNS_INO, LOST_EVENTS, LOST_MAP, LOST_SYSCALLS, ProcessEvent, RAW_SYSCALLS_CATEGORY,
+    SPECS_MAP, SYS_ARGS, SYS_ENTER_PROGRAM, SYS_EXIT_PROGRAM, SYS_NR, SYS_RET, SYSCALL_SPECS,
+    SYSCALLS_CATEGORY, SYSCALLS_MAP, SyscallRecord, TRACEPOINTS, close_number, syscall_numbers,
 };
 
 use crate::{Unavailable, format};
@@ -219,6 +219,9 @@ pub(crate) fn load() -> Result<Probe, Unavailable> {
     loader.override_global(SYS_NR, &plan.nr_at, true);
     loader.override_global(SYS_ARGS, &plan.args_at, true);
     loader.override_global(SYS_RET, &plan.ret_at, true);
+    let raw_enter = raw_enter_matches(&plan);
+    let close_nr = if raw_enter { close_number() } else { ABSENT };
+    loader.override_global(CLOSE_NR, &close_nr, true);
     // The object the build script compiled for this host's byte order.
     let object = aya::include_bytes_aligned!(concat!(env!("OUT_DIR"), "/topgent-probe"));
     let mut ebpf = loader.load(object).map_err(refused)?;
@@ -258,19 +261,38 @@ pub(crate) fn load() -> Result<Probe, Unavailable> {
     let program = tracepoint(&mut ebpf, CLOSE_PROGRAM)?;
     program.load().map_err(refused)?;
     if knows_sockets {
-        program
-            .attach(SYSCALLS_CATEGORY, "sys_enter_close")
-            .map_err(refused)?;
-    }
-    for (program, side) in [(SYS_ENTER_PROGRAM, "enter"), (SYS_EXIT_PROGRAM, "exit")] {
-        let program = tracepoint(&mut ebpf, program)?;
-        program.load().map_err(refused)?;
-        for call in &plan.calls {
-            let tracepoint = format!("sys_{side}_{}", call.name);
+        if raw_enter {
             program
-                .attach(SYSCALLS_CATEGORY, &tracepoint)
+                .attach(RAW_SYSCALLS_CATEGORY, "sys_enter")
+                .map_err(refused)?;
+        } else {
+            program
+                .attach(SYSCALLS_CATEGORY, "sys_enter_close")
                 .map_err(refused)?;
         }
+    }
+    // The enter side on the generic tracepoint where its layout matches; the
+    // per-syscall enters drop calls on some kernels (`RAW_SYSCALLS_CATEGORY`).
+    // A call without a spec returns at once there.
+    let program = tracepoint(&mut ebpf, SYS_ENTER_PROGRAM)?;
+    program.load().map_err(refused)?;
+    if raw_enter {
+        program
+            .attach(RAW_SYSCALLS_CATEGORY, "sys_enter")
+            .map_err(refused)?;
+    } else {
+        for call in &plan.calls {
+            program
+                .attach(SYSCALLS_CATEGORY, &format!("sys_enter_{}", call.name))
+                .map_err(refused)?;
+        }
+    }
+    let program = tracepoint(&mut ebpf, SYS_EXIT_PROGRAM)?;
+    program.load().map_err(refused)?;
+    for call in &plan.calls {
+        program
+            .attach(SYSCALLS_CATEGORY, &format!("sys_exit_{}", call.name))
+            .map_err(refused)?;
     }
 
     let events = RingBuf::try_from(take_map(&mut ebpf, EVENTS_MAP)?)
@@ -294,6 +316,29 @@ pub(crate) fn load() -> Result<Probe, Unavailable> {
         call_cwds: Vec::new(),
         reads_cwd,
     })
+}
+
+/// Whether `raw_syscalls/sys_enter` keeps the syscall number and arguments
+/// where the per-syscall enter records do, so the enter programs can read
+/// either. `false` when it cannot be read or differs, and then the per-syscall
+/// enters are used as before.
+fn raw_enter_matches(plan: &SyscallPlan) -> bool {
+    if plan.calls.is_empty() || plan.nr_at == ABSENT || plan.args_at == ABSENT {
+        return false;
+    }
+    let Ok(text) = tracepoint_format(RAW_SYSCALLS_CATEGORY, "sys_enter") else {
+        return false;
+    };
+    let (Some(id), Some(args)) = (format::field(&text, "id"), format::field(&text, "args")) else {
+        return false;
+    };
+    // The number is read as its low four bytes, which on a little-endian
+    // host is where an eight-byte `id` keeps them.
+    cfg!(target_endian = "little")
+        && id.offset == plan.nr_at
+        && id.size == 8
+        && args.offset == plan.args_at
+        && args.size == 8 * 6
 }
 
 /// One syscall to trace, as this kernel describes it.

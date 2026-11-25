@@ -119,6 +119,9 @@ static SYS_NR: u32 = 0;
 static SYS_ARGS: u32 = 0;
 #[unsafe(no_mangle)]
 static SYS_RET: u32 = 0;
+/// `close`'s number when this program shares the generic enter tracepoint.
+#[unsafe(no_mangle)]
+static CLOSE_NR: u32 = ABSENT;
 
 // Byte offsets in kernel structs, read from BTF by the loader (BTF_FIELDS in
 // topgent-ebpf-common). ABSENT where this kernel lacks the field.
@@ -225,6 +228,13 @@ pub fn on_execveat_args(ctx: TracePointContext) -> u32 {
 /// written bytes not yet reported, which are reported now.
 #[tracepoint]
 pub fn on_close(ctx: TracePointContext) -> u32 {
+    // On the generic enter tracepoint every syscall arrives; keep `close`.
+    let close_nr = setting(&CLOSE_NR);
+    if close_nr != ABSENT
+        && field::<i32>(&ctx, &SYS_NR).and_then(|n| u32::try_from(n).ok()) != Some(close_nr)
+    {
+        return 0;
+    }
     if let Some(fd) = read::<u64>(&ctx, setting(&SYS_ARGS) as usize) {
         let key = socket_key(current_tgid(), fd);
         let _ = flush_sent(key, fd);
